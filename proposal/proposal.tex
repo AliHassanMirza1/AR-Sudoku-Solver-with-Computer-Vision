@@ -1,0 +1,45 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{enumitem}
+\setlist{nosep}
+
+\title{Live AR Sudoku Solver}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+
+\textbf{Goal.} Point a webcam at a printed Sudoku. The app detects the grid, reads the digits,
+solves the puzzle and overlays the solution on the paper in real time, following the paper
+as it moves.
+
+\textbf{Pipeline.}
+\begin{enumerate}
+  \item Grid detection: adaptive threshold, Canny edges, largest 4-sided contour, and Hough
+        lines to refine the grid.
+  \item Rectification: homography from the 4 corners to a flat square image.
+  \item Cell reading: split into 81 cells, detect empty cells, classify digits with a small
+        CNN trained on MNIST plus printed-font digits.
+  \item Solving: backtracking with constraint propagation.
+  \item AR overlay: draw the solution through the inverse homography and track the corners
+        across frames instead of re-detecting every frame.
+\end{enumerate}
+
+\textbf{Beyond existing hobby versions.} Simple versions exist online, so we focus on:
+\begin{itemize}
+  \item robustness to tilt, glare, shadows and curved paper;
+  \item a stable overlay from frame to frame;
+  \item a measured comparison of contour-based vs Hough-based grid detection.
+\end{itemize}
+
+\textbf{Evaluation.} About 50 photos and 10 videos under varied conditions. Metrics: grid
+detection rate, digit accuracy per cell, fully-solved rate, FPS, overlay jitter.
+
+\textbf{Course fit.} Edges, Hough transform, thresholding and segmentation, homography,
+recognition.
+
+\textbf{Risk.} Low: every stage has a known baseline, so effort goes into robustness and the
+demo.
+
+\end{document}
