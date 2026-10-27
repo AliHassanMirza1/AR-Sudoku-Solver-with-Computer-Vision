@@ -1,0 +1,142 @@
+\documentclass[10pt]{article}
+\usepackage[margin=0.75in]{geometry}
+\usepackage{enumitem}
+\setlist{itemsep=2pt, parsep=0pt, topsep=3pt}
+\usepackage{parskip}
+\sloppy
+
+\title{AR Sudoku: Vision and Solver Design}
+\author{Leonardo Tisato}
+\date{}
+
+\begin{document}
+\maketitle
+\vspace{-2em}
+
+\section*{1. Scope}
+
+The user points the camera at a printed Sudoku, empty or already started by hand. The app writes
+the missing digits on the paper and marks the user's wrong digits.
+
+\begin{itemize}
+  \item \textbf{My part (vision + solver):} from a frame or photo to grid position, digits read
+        (printed and handwritten), confidence, solution, reveal order and wrong digits.
+  \item \textbf{Ali's part (app):} camera, screens, drawing the digits on the paper, Check
+        screen, hosting.
+\end{itemize}
+
+\section*{2. Interface}
+
+A Python package \texttt{sudoku\_cv} that runs inside the browser with Pyodide, in a background
+thread. It only uses \texttt{numpy} and Pyodide's OpenCV build (4.x), no threads and no windows.
+The digit templates and the handwritten-digit training data are small files shipped with the
+package.
+
+\begin{itemize}
+  \item \texttt{tracker = SudokuTracker()}: one object per camera stream. It keeps state between
+        frames (the puzzle read so far).
+  \item \texttt{result = tracker.process\_frame(frame, debug=False)}: \texttt{frame} is a
+        \texttt{uint8} numpy array, RGBA ($H\times W\times4$, straight from a canvas) or BGR
+        ($H\times W\times3$). The app shrinks it to 640\,px first.
+  \item \texttt{result = process\_image(image, debug=False)}: same output for a single photo
+        (upload, sample). No waiting for a stable grid, no state.
+  \item \texttt{tracker.set\_givens(givens)}: the user fixed digits on the Check screen. The
+        tracker keeps the corrected digits, solves again and returns the new result. The
+        corrected digits stay until \texttt{reset()}.
+  \item \texttt{solve(givens, user\_digits)}: the solver alone, returns the \texttt{status},
+        \texttt{solution}, \texttt{order} and \texttt{wrong} fields below.
+  \item \texttt{tracker.reset()}: forget the current puzzle (``new puzzle'').
+\end{itemize}
+
+\texttt{result} is a plain dict of lists, ints, floats and strings:
+\begin{verbatim}
+{"status": "solved",                # no_grid | reading | no_solution | solved
+ "corners": [[x,y], ...],           # 4 floats, frame pixels, order TL, TR, BR, BL
+ "homography": [[...], ...],        # 3x3, square (0..450) -> frame
+ "givens": [[5,3,0,...], ...],      # 9x9, printed digits, 0 = none
+ "user_digits": [[0,0,4,...], ...], # 9x9, handwritten digits, 0 = none
+ "confidence": [[0.97,...], ...],   # 9x9, 0..1, how sure the reading of each cell is
+ "solution": [[5,3,4,...], ...],    # 9x9, null unless status is solved
+ "order": [[r,c], ...],             # cells with no digit at all, in reveal order
+ "wrong": [[r,c], ...],             # handwritten digits that differ from the solution
+ "debug": {...}}                    # only if debug=True: threshold, contour, flat grid
+\end{verbatim}
+
+\begin{itemize}
+  \item Coordinates: x = column, y = row, origin top-left, in pixels of the frame passed in.
+        Rows and columns of the puzzle are 0--8 from the top-left of the puzzle.
+  \item Status: \texttt{no\_grid} = no puzzle in view; \texttt{reading} = puzzle found, hold
+        still; \texttt{no\_solution} = the printed digits read make the puzzle unsolvable
+        (probably a misread, go to Check); \texttt{solved} = start or continue the reveal.
+        Wrong handwritten digits do not block the solution, they go in \texttt{wrong}.
+  \item Reveal order: the cell with the fewest candidates comes first, so a single step also
+        works as a hint. The app draws each digit at the cell center in the $450\times450$ square
+        and maps it with \texttt{homography}.
+\end{itemize}
+
+A stub with the same interface and fake data comes first, so the app can be built in parallel.
+
+\section*{3. Pipeline}
+
+\begin{enumerate}
+  \item \textbf{Grid detection:} grayscale, Gaussian blur, adaptive threshold (handles shadows),
+        largest contour that approximates to 4 corners. Alternative to compare: Canny edges +
+        Hough lines, keep the outermost horizontal and vertical lines, intersect them.
+  \item \textbf{Rectification:} homography from the 4 corners to a $450\times450$ square.
+  \item \textbf{Cells:} split into 81 cells of $50\times50$, cut the borders to remove grid
+        lines. A cell is empty if the ink pixels in its center are below a threshold.
+  \item \textbf{Printed digits:} the largest ink blob is centered and resized, then compared by
+        normalized cross-correlation (template matching) to digits 1--9 rendered from a few
+        common fonts. The best score is the confidence.
+  \item \textbf{Handwritten digits:} a cell with ink but a low template score is handwritten. It
+        is classified with HOG features and k-nearest neighbours, trained on MNIST plus a few
+        handwritten cells of our own. The share of neighbours that agree is the confidence.
+  \item \textbf{Solver (by hand):} check the printed digits for duplicates in rows, columns and
+        boxes, then backtracking that fills the cell with the fewest candidates first. It gives
+        the reveal order. Handwritten digits are compared with the solution to find the wrong ones.
+\end{enumerate}
+
+\section*{4. Live behaviour}
+
+\begin{itemize}
+  \item Reading and solving run when the grid has been found in a few consecutive frames with
+        little corner motion. The result is cached. While the grid stays stable, the cells are
+        read again every few seconds, so new pencil digits are picked up.
+  \item Every frame only re-detects the 4 corners and smooths them over time (moving average).
+        If the grid is lost for a short time, the last result is kept. If it is lost for longer,
+        or the printed digits read differ from the cache, the tracker resets.
+  \item Targets in the browser at 640\,px: the per-frame path fast enough for Ali's 15 updates/s
+        on a laptop and 10 on phones; reading + solving about 1\,s.
+\end{itemize}
+
+\section*{5. Assumptions and limits}
+
+\begin{itemize}
+  \item One standard $9\times9$ puzzle in view, roughly upright (less than about $45^\circ$).
+  \item Faint pencil, messy handwriting, curved paper and glare may fail: reported as limitations.
+\end{itemize}
+
+\section*{6. Evaluation (for the report)}
+
+Our own labelled videos and photos (tilt, shadows, glare, curved paper, fonts, half filled).
+Metrics: grid detection rate (contour vs Hough), printed and handwritten digit accuracy, wrong
+digits caught, solved rate, FPS, jitter.
+
+\section*{7. Repo and working rules}
+
+My code is in \texttt{sudoku\_cv/}, the app in \texttt{app/}, sample photos (printed and half
+filled) in \texttt{samples/}. We do not edit each other's folders; interface changes are agreed
+first.
+
+\section*{8. Timeline}
+
+\begin{itemize}
+  \item \textbf{Oct 28:} interface stub pushed (fake data, all fields).
+  \item \textbf{Nov 2:} Ali decides if Pyodide is fast enough. If not, the same interface runs on
+        a server.
+  \item \textbf{Nov 15:} real pipeline for printed digits behind the same interface.
+  \item \textbf{Nov 16 -- 22:} integration with the app; handwritten digits added.
+  \item \textbf{Nov 30:} code freeze. \textbf{Dec 1/3:} presentation. \textbf{Dec 11:} report.
+\end{itemize}
+
+\end{document}
