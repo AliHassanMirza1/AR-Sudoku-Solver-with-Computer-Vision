@@ -5,3 +5,4 @@ project-instructions.pdf
 *.synctex.gz
 __pycache__/
 .venv/
+samples/
