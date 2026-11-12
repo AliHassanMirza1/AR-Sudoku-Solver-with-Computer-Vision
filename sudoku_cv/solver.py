@@ -7,6 +7,11 @@ def box_cells(r, c):
     return [(br + i, bc + j) for i in range(3) for j in range(3)]
 
 
+GROUPS = ([[(r, c) for c in range(9)] for r in range(9)]
+          + [[(r, c) for r in range(9)] for c in range(9)]
+          + [box_cells(3 * (b // 3), 3 * (b % 3)) for b in range(9)])
+
+
 def is_valid(grid):
     for i in range(9):
         groups = [
@@ -51,15 +56,30 @@ def backtrack(grid):
     return False
 
 
+def next_cell(grid):
+    cands = {(r, c): candidates(grid, r, c) for r in range(9) for c in range(9) if grid[r][c] == 0}
+    if not cands:
+        return None
+    for cell, cand in cands.items():
+        if len(cand) == 1:
+            return cell
+    for group in GROUPS:
+        for d in range(1, 10):
+            spots = [cell for cell in group if d in cands.get(cell, [])]
+            if len(spots) == 1:
+                return spots[0]
+    return min(cands, key=lambda cell: len(cands[cell]))
+
+
 def reveal_order(grid, solution):
     grid = copy_grid(grid)
     order = []
-    best = fewest_candidates_cell(grid)
-    while best is not None:
-        r, c, _ = best
+    cell = next_cell(grid)
+    while cell is not None:
+        r, c = cell
         grid[r][c] = solution[r][c]
         order.append([r, c])
-        best = fewest_candidates_cell(grid)
+        cell = next_cell(grid)
     return order
 
 
