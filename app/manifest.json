@@ -1,0 +1,11 @@
+{
+  "name": "AR Sudoku",
+  "short_name": "AR Sudoku",
+  "description": "Point your camera at a Sudoku and watch it solve itself on the paper.",
+  "start_url": ".",
+  "scope": ".",
+  "display": "standalone",
+  "background_color": "#18181b",
+  "theme_color": "#18181b",
+  "icons": [{ "src": "icon.png", "sizes": "512x512", "type": "image/png", "purpose": "any" }]
+}
