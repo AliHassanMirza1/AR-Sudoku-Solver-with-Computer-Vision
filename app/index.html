@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
   <meta name="theme-color" content="#18181b">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -49,6 +49,7 @@
       </div>
       <p id="counter" class="note"></p>
       <div class="row">
+        <button id="reset-digits">Reset</button>
         <button id="back">Back</button>
         <button id="next" class="primary">Next</button>
         <button id="check">Check</button>
@@ -62,6 +63,10 @@
     </footer>
 
     <footer class="controls" data-for="place">
+      <div class="segmented">
+        <button id="mode-move" class="on">Move &amp; resize</button>
+        <button id="mode-tilt">Tilt</button>
+      </div>
       <p class="note">Table, wall, whiteboard or a sheet of paper</p>
       <div class="row">
         <button id="reset-corners">Reset</button>
@@ -75,6 +80,7 @@
         <button id="new">New</button>
         <button id="hint" class="primary">Hint</button>
         <button id="solve">Solve</button>
+        <button id="reset-game">Reset</button>
       </div>
       <button id="adjust" class="link">Adjust the corners</button>
     </footer>

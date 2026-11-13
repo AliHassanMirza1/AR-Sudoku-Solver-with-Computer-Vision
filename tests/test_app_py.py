@@ -120,7 +120,8 @@ class TrackTest(unittest.TestCase):
         self.assertEqual(tracker.state, "lost")
 
         moved, move = camera_move(frame, 30, 10, 5)
-        tracker.update(gray(moved))
+        for _ in range(track.ORB_EVERY):  # ORB, which finds the board again, runs every few frames
+            tracker.update(gray(moved))
         self.assertEqual(tracker.state, "tracking")
         self.assertLess(np.abs(tracker.corners - transform(self.board, move)).max(), 3)
 

@@ -14,7 +14,7 @@ import numpy as np
 
 from sudoku_cv.detect import order_corners
 
-MAX_POINTS = 150
+MAX_POINTS = 100
 MIN_POINTS = 12
 POINT_QUALITY = 0.01
 POINT_DISTANCE = 8
@@ -29,6 +29,8 @@ MIN_MATCHES = 25
 MATCH_RATIO = 0.75
 OCCLUDED_RATIO = 0.6
 LOST_FRAMES = 5
+ORB_EVERY = 3  # while the board is missing, ORB (the slowest step) runs on every 3rd frame
+NEW_POINTS_EVERY = 5  # finding new points to follow at most every 5th frame
 STILL_PIXELS = 1.5
 FOLLOW_PIXELS = 1.5
 MIN_SMOOTHING = 0.25
@@ -133,6 +135,7 @@ class SurfaceTracker:
         self.homography = np.eye(3)  # reference frame -> current frame
         self.margin = REGION_MARGIN if around else PRINTED_MARGIN
         self.prev = gray
+        self.frames = 0
         self.missed = 0
         self.still_count = 0
 
@@ -153,10 +156,11 @@ class SurfaceTracker:
         return self.ref_sheet is not None
 
     def update(self, gray):
+        self.frames += 1
         homography, state = self.follow_points(gray)
         if homography is None and self.on_sheet:
             homography, state = self.follow_sheet(gray), "tracking"
-        if homography is None and not self.plain:
+        if homography is None and not self.plain and self.missed % ORB_EVERY == 0:
             homography, state = self.match_reference(gray), "tracking"
 
         corners = None if homography is None else transform(self.ref_corners, homography)
@@ -164,7 +168,7 @@ class SurfaceTracker:
             self.homography = homography
             self.missed = 0
             self.move_corners(corners)
-            if len(self.points) < MAX_POINTS // 2:
+            if len(self.points) < MAX_POINTS // 2 and self.frames % NEW_POINTS_EVERY == 0:
                 self.add_points(gray)
         elif self.plain:
             state = "plain"

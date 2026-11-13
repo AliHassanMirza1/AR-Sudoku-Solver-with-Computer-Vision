@@ -20,7 +20,8 @@ from sudoku_cv.tracker import make_result
 from generate import generate as generate_puzzle
 from track import SurfaceTracker, board_on_sheet, find_sheet
 
-READ_STILL_FRAMES = 5
+READ_STILL_FRAMES = 5  # pen digits are read once the board has been still this long,
+READ_EVERY_FRAMES = 15  # and again every 15 frames while it stays still (reading takes ~25 ms)
 
 paper_tracker = SudokuTracker()
 surface = None
@@ -83,10 +84,10 @@ def follow(frame, givens=None):
     gray = gray_of(frame)
     surface.update(gray)
     ink = None
+    still = surface.still_count - READ_STILL_FRAMES
     if (givens is not None and surface.on_sheet and surface.state == "tracking"
-            and surface.still_count >= READ_STILL_FRAMES):
+            and still >= 0 and still % READ_EVERY_FRAMES == 0):
         ink = read_handwritten(gray, surface.corners, givens)
-        surface.still_count = 0
     return board_state(ink)
 
 

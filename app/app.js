@@ -2,13 +2,15 @@
 // answers on the paper. Views (body[data-view]): home, paper, check, place, play, typing.
 
 import { call, ready } from "./python.js";
-import { COLORS, Stage, cellAt, drawBoard, tint } from "./overlay.js";
-import { Game, Handles } from "./virtual.js";
+import { COLORS, Stage, cellAt, drawBoard, tiltedSurface, tint } from "./overlay.js";
+import { Game, Placement } from "./virtual.js";
 
 const FRAME_SIZE = 640; // longest side of the frames sent to Python
 const STILL_SIZE = 1600; // longest side of photos shown on screen
 const REVEAL_MS = 120; // Live mode: time between two revealed digits
 const SNAP_MS = 500; // placing a board: how often to look for a sheet of paper
+const FOCAL = 0.78; // camera focal length / longest side of the picture (a 65° wide phone camera)
+const MAX_TABLE_TILT = 70; // phone tilt (degrees from pointing straight down) still read as a table
 
 const MESSAGES = {
   loading: ["Loading the solver…", ""],
@@ -19,7 +21,8 @@ const MESSAGES = {
   no_solution: ["Some digits look wrong. Tap Check.", "bad"],
   solved: ["Solved. Watch the paper.", "good"],
   checking: ["Tap a digit the app read wrong", "accent"],
-  placing: ["Drag the corners. Tap Done.", "accent"],
+  placing: ["Drag to move, corners to resize", "accent"],
+  placing_tilt: ["Drag each corner into place", "accent"],
   snapped: ["Corners snapped to the sheet. Tap Done.", "accent"],
   tracking: ["Tap a cell to play", "accent"],
   tracking_sheet: ["Tap a cell, or write on the paper", "accent"],
@@ -36,7 +39,8 @@ const video = $("video");
 const still = $("still");
 const boardCanvas = $("board");
 const stage = new Stage($("stage"), boardCanvas);
-const handles = new Handles($("handles"), showPlacing);
+const placement = new Placement($("handles"), showPlacing);
+const motion = { tilt: null }; // degrees between the back camera and straight down (tilt sensor)
 
 const state = {
   token: 0, // changes with the view, so late results from Python are dropped
@@ -69,6 +73,7 @@ const view = () => document.body.dataset.view;
 function show(name) {
   document.body.dataset.view = name;
   state.token++;
+  stage.measure();
   render();
 }
 
@@ -78,7 +83,7 @@ function render() {
     case "check":
       return renderPaper();
     case "place":
-      return showPlacing(handles.corners);
+      return placement.board && showPlacing(placement.corners);
     case "play":
       return renderPlay();
     case "typing":
@@ -88,6 +93,7 @@ function render() {
 
 function setStatus(key, pill = $("status")) {
   const [text, tone] = MESSAGES[key];
+  if (pill.textContent === text) return; // unchanged text would still cost a layout
   pill.textContent = text;
   pill.dataset.tone = tone;
 }
@@ -181,19 +187,33 @@ const grabContext = grabCanvas.getContext("2d", { willReadFrequently: true });
 
 function grabFrame() {
   const { width, height } = (stage.frame = frameSize());
-  grabCanvas.width = width;
-  grabCanvas.height = height;
+  if (grabCanvas.width !== width || grabCanvas.height !== height) {
+    grabCanvas.width = width;
+    grabCanvas.height = height;
+  }
   grabContext.drawImage(state.source === "video" ? video : still, 0, 0, width, height);
   return grabContext.getImageData(0, 0, width, height);
 }
 
-/** Every animation frame: reveal digits in Live mode, and send a frame when Python is free. */
+// The camera gives about 30 new pictures a second and the screen redraws 60 times or more;
+// only new pictures are worth sending to Python.
+let newPicture = true;
+if ("requestVideoFrameCallback" in HTMLVideoElement.prototype) {
+  const onPicture = () => {
+    newPicture = true;
+    video.requestVideoFrameCallback(onPicture);
+  };
+  video.requestVideoFrameCallback(onPicture);
+}
+
+/** Every animation frame: reveal digits in Live mode, and send a new picture when Python is free. */
 function loop(now) {
   requestAnimationFrame(loop);
   revealNext(now);
-  if (state.busy || !state.pythonReady || state.source !== "video" || !video.videoWidth) return;
+  if (state.busy || !newPicture || !state.pythonReady || state.source !== "video" || !video.videoWidth) return;
   const task = frameTask(now);
   if (!task) return;
+  newPicture = !("requestVideoFrameCallback" in video);
   state.busy = true;
   task(grabFrame())
     .catch(console.error)
@@ -203,7 +223,7 @@ function loop(now) {
 function frameTask(now) {
   if (view() === "paper") return state.pinned ? followBoard : readPaper;
   if (view() === "play") return followBoard;
-  if (view() === "place" && state.placing === "virtual" && !handles.touched && now - state.lastSnap > SNAP_MS) {
+  if (view() === "place" && state.placing === "virtual" && !placement.touched && now - state.lastSnap > SNAP_MS) {
     state.lastSnap = now;
     return snapToSheet;
   }
@@ -229,9 +249,9 @@ async function followBoard(frame) {
 async function snapToSheet(frame) {
   const token = state.token;
   const { corners } = await call("snap", [], frame);
-  if (token !== state.token || handles.touched || !corners) return;
+  if (token !== state.token || placement.touched || !corners) return;
   state.snapped = true;
-  handles.set(corners.map((p) => stage.toScreen(p)));
+  placement.placeQuad(corners.map((p) => stage.toScreen(p)));
 }
 
 // ---------- paper puzzle ----------
@@ -353,22 +373,72 @@ async function fixDigit(r, c) {
 
 // ---------- placing a board by hand ----------
 
+/**
+ * Place the board by hand. A board already in view starts where it is (on its surface).
+ * A new virtual board starts on the surface guessed by surfaceGuess; a sheet of paper in view
+ * takes over (snapToSheet). Paper puzzles start in tilt mode: corners go onto the grid.
+ */
 function startPlacing(kind) {
   Object.assign(state, { placing: kind, snapped: false });
   show("place");
-  const visible = state.corners && state.track !== "lost";
-  handles.set(visible ? state.corners.map((p) => stage.toScreen(p)) : handles.centred(), Boolean(visible));
+  setTilt(kind === "paper");
+  if (state.corners && state.track !== "lost") placement.placeQuad(state.corners.map((p) => stage.toScreen(p)), true);
+  else resetPlacement();
+}
+
+function resetPlacement() {
+  state.snapped = false;
+  if (state.placing === "paper") placement.placeQuad(placement.centred());
+  else placement.place(...surfaceGuess());
+}
+
+/**
+ * The surface a new board starts on: the table below the phone when its tilt sensor says it
+ * points down at one, else a surface facing the camera (a wall, or a laptop's view).
+ */
+function surfaceGuess() {
+  const { scale } = stage.fit();
+  const { width, height } = stage.frame;
+  const tilt = motion.tilt !== null && motion.tilt <= MAX_TABLE_TILT ? Math.max(0, motion.tilt) : 0;
+  const focal = FOCAL * Math.max(width, height) * scale;
+  const surface = tiltedSurface((tilt * Math.PI) / 180, focal, stage.toScreen([width / 2, height / 2]));
+  return [surface, { x: 0, y: 0, side: 0.6 * Math.min(width, height) * scale }];
+}
+
+function watchTilt({ beta, gamma }) {
+  if (beta === null) return;
+  const portrait = (screen.orientation?.angle ?? 0) % 180 === 0;
+  const tilt = portrait ? beta : Math.abs(gamma);
+  if (motion.tilt !== null && Math.abs(tilt - motion.tilt) < 1) return;
+  motion.tilt = tilt;
+  // Until the user touches it, a new board follows the phone's tilt.
+  if (view() === "place" && state.placing === "virtual" && !placement.touched && !state.snapped) {
+    placement.place(surfaceGuess()[0], placement.board);
+  }
+}
+
+/** iOS shows the tilt sensor only after the user allows it, asked from a tap. */
+function askForTilt() {
+  window.DeviceOrientationEvent?.requestPermission?.().catch(() => {});
+}
+
+function setTilt(on) {
+  placement.tilt = on;
+  $("mode-move").classList.toggle("on", !on);
+  $("mode-tilt").classList.toggle("on", on);
+  render();
 }
 
 function showPlacing(screenCorners) {
-  if (view() !== "place" || screenCorners.length !== 4) return;
+  if (view() !== "place") return;
   drawBoard(boardCanvas, { lines: COLORS.placing, background: "rgba(255,255,255,0.15)" });
   stage.showBoard(screenCorners.map((p) => stage.toFrame(p)));
-  setStatus(state.snapped && !handles.touched ? "snapped" : "placing");
+  if (state.snapped && !placement.touched) setStatus("snapped");
+  else setStatus(placement.tilt ? "placing_tilt" : "placing");
 }
 
 async function finishPlacing() {
-  const corners = handles.corners.map((p) => stage.toFrame(p));
+  const corners = placement.corners.map((p) => stage.toFrame(p));
   await ready;
   if (state.placing === "paper") {
     setPaperResult(await call("read_at", [corners], grabFrame()));
@@ -492,7 +562,10 @@ $("start-camera").onclick = () => run(async () => {
   await startCamera();
   startPaper();
 });
-$("draw-board").onclick = () => run(newPuzzle);
+$("draw-board").onclick = () => {
+  askForTilt();
+  run(newPuzzle);
+};
 $("try-sample").onclick = () => run(async () => openPhoto(await (await fetch("sample.jpg")).blob()));
 $("upload").onchange = (e) => {
   const file = e.target.files[0];
@@ -503,28 +576,40 @@ $("upload").onchange = (e) => {
 $("close").onclick = () => goHome();
 $("flash").onclick = toggleFlash;
 $("stage").addEventListener("click", tapStage);
+$("stage").addEventListener("gesturestart", (e) => e.preventDefault()); // Safari pinch zoom
 
 $("live").onclick = () => setStep(false);
 $("step").onclick = () => setStep(true);
 $("next").onclick = () => { state.shown++; render(); };
 $("back").onclick = () => { state.shown--; render(); };
 $("check").onclick = startCheck;
+$("reset-digits").onclick = () => {
+  state.shown = 0;
+  setStep(true); // in Live mode the digits would come back at once
+};
 $("corners").onclick = () => startPlacing("paper");
 $("continue").onclick = endCheck;
 
-$("reset-corners").onclick = () => { state.snapped = false; handles.set(handles.centred()); };
+$("mode-move").onclick = () => setTilt(false);
+$("mode-tilt").onclick = () => setTilt(true);
+$("reset-corners").onclick = resetPlacement;
 $("done").onclick = () => run(finishPlacing);
 
 $("new").onclick = () => run(newPuzzle);
 $("hint").onclick = () => run(hint);
 $("solve").onclick = () => { state.game.showSolution = true; render(); };
+$("reset-game").onclick = () => { state.game.reset(); render(); };
 $("adjust").onclick = () => startPlacing("virtual");
 
 $("flat").onclick = (e) => run(() => typeDigit(e));
 $("type-use").onclick = () => run(useTyped);
 $("type-cancel").onclick = () => (state.pinned ? show("play") : goHome());
 
-window.addEventListener("resize", render);
+window.addEventListener("resize", () => {
+  stage.measure();
+  render();
+});
+window.addEventListener("deviceorientation", watchTilt);
 
 ready.then(
   () => {

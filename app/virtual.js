@@ -1,44 +1,72 @@
-// The virtual board: corner handles to place it, and the puzzle the user plays on it.
+// The virtual board: placing it on a surface, and the puzzle the user plays on it.
 
-import { COLORS, tint } from "./overlay.js";
+import { COLORS, SIZE, apply, invert, squareToQuad, tint } from "./overlay.js";
 
 const GRAB_RADIUS = 36;
+const MIN_SIDE = 60; // smallest board side on screen, in pixels
+const CORNER_SIGNS = [[-1, -1], [1, -1], [1, 1], [-1, 1]]; // TL, TR, BR, BL from the centre
 
 /**
- * Four draggable corner handles (stage pixels). Dragging inside the board moves all 4.
- * `onChange(corners)` is called on every move.
+ * The board while it is placed, in stage pixels. The board is a square lying on a surface:
+ * `surface` is the homography from surface coordinates to the screen, and `board` is the
+ * square's centre and side on the surface. Moving and resizing change only `board`, so the
+ * board slides and grows on the surface instead of turning in 3D.
+ *
+ *   drag inside     move the board on the surface
+ *   drag a corner   resize it, the opposite corner stays; in tilt mode, move that corner alone,
+ *                   which sets the surface's perspective
+ *   two fingers     resize it
+ *
+ * `onChange(corners)` is called at most once per animation frame.
  */
-export class Handles {
+export class Placement {
   constructor(layer, onChange) {
     this.layer = layer;
     this.onChange = onChange;
-    this.corners = [];
-    this.active = null;
+    this.tilt = false;
     this.touched = false;
-    this.dots = [0, 1, 2, 3].map(() => {
+    this.pointers = new Map(); // pointer id -> [x, y]
+    this.gesture = null;
+    this.frame = 0;
+    this.dots = CORNER_SIGNS.map(() => {
       const dot = document.createElement("div");
       dot.className = "handle";
       return layer.appendChild(dot);
     });
     layer.addEventListener("pointerdown", (e) => this.grab(e));
     layer.addEventListener("pointermove", (e) => this.drag(e));
-    layer.addEventListener("pointerup", () => this.drop());
-    layer.addEventListener("pointercancel", () => this.drop());
+    layer.addEventListener("pointerup", (e) => this.drop(e));
+    layer.addEventListener("pointercancel", (e) => this.drop(e));
+  }
+
+  get corners() {
+    const { x, y, side } = this.board;
+    return CORNER_SIGNS.map(([sx, sy]) => apply(this.surface, [x + (sx * side) / 2, y + (sy * side) / 2]));
+  }
+
+  get dragging() {
+    return this.gesture !== null;
+  }
+
+  /** Put the board on a surface (homography from surface coordinates to stage pixels). */
+  place(surface, board, touched = false) {
+    this.surface = surface;
+    this.inverse = invert(surface);
+    this.board = board;
+    this.touched = touched;
+    this.changed();
+  }
+
+  /** Put the board exactly on 4 stage corners; the surface's perspective follows from them. */
+  placeQuad(corners, touched = false) {
+    this.place(squareToQuad(corners), { x: SIZE / 2, y: SIZE / 2, side: SIZE }, touched);
   }
 
   /** A centred square covering most of the stage. */
   centred() {
     const { clientWidth: w, clientHeight: h } = this.layer;
     const half = 0.3 * Math.min(w, h);
-    const [x, y] = [w / 2, h / 2];
-    return [[x - half, y - half], [x + half, y - half], [x + half, y + half], [x - half, y + half]];
-  }
-
-  set(corners, touched = false) {
-    this.corners = corners.map(([x, y]) => [x, y]);
-    this.touched = touched;
-    this.render();
-    this.onChange(this.corners);
+    return CORNER_SIGNS.map(([sx, sy]) => [w / 2 + sx * half, h / 2 + sy * half]);
   }
 
   point(e) {
@@ -46,46 +74,100 @@ export class Handles {
     return [e.clientX - rect.left, e.clientY - rect.top];
   }
 
+  toSurface(p) {
+    return apply(this.inverse, p);
+  }
+
+  spread() {
+    const [a, b] = [...this.pointers.values()];
+    return Math.hypot(a[0] - b[0], a[1] - b[1]);
+  }
+
   grab(e) {
     const p = this.point(e);
-    const distances = this.corners.map(([x, y]) => Math.hypot(x - p[0], y - p[1]));
-    const nearest = distances.indexOf(Math.min(...distances));
-    if (distances[nearest] < GRAB_RADIUS) this.active = nearest;
-    else if (inside(this.corners, p)) this.active = "all";
-    else return;
-    this.last = p;
-    this.touched = true;
+    this.pointers.set(e.pointerId, p);
     this.layer.setPointerCapture(e.pointerId);
-    this.render();
+    if (this.pointers.size === 2) {
+      this.gesture = { kind: "pinch", spread: this.spread(), side: this.board.side };
+    } else if (this.pointers.size === 1) {
+      const corners = this.corners;
+      const distances = corners.map(([x, y]) => Math.hypot(x - p[0], y - p[1]));
+      const i = distances.indexOf(Math.min(...distances));
+      if (distances[i] < GRAB_RADIUS) this.gesture = { kind: "corner", i, anchor: this.toSurface(corners[(i + 2) % 4]) };
+      else if (inside(corners, p)) this.gesture = { kind: "move", last: this.toSurface(p) };
+    }
+    if (this.gesture) this.touched = true;
+    this.changed();
   }
 
   drag(e) {
-    if (this.active === null) return;
+    if (!this.pointers.has(e.pointerId)) return;
     const p = this.point(e);
-    const [dx, dy] = [p[0] - this.last[0], p[1] - this.last[1]];
-    this.last = p;
-    this.corners.forEach((corner, i) => {
-      if (this.active === "all" || this.active === i) {
-        corner[0] += dx;
-        corner[1] += dy;
-      }
-    });
-    this.render();
-    this.onChange(this.corners);
+    this.pointers.set(e.pointerId, p);
+    const g = this.gesture;
+    if (!g) return;
+    const board = { ...this.board };
+    if (g.kind === "move") {
+      const q = this.toSurface(p);
+      board.x += q[0] - g.last[0];
+      board.y += q[1] - g.last[1];
+      g.last = q;
+    } else if (g.kind === "pinch") {
+      board.side = (g.side * this.spread()) / g.spread;
+    } else if (this.tilt) {
+      const corners = this.corners;
+      corners[g.i] = p;
+      if (valid(corners)) this.placeQuad(corners, true);
+      return;
+    } else {
+      const [sx, sy] = CORNER_SIGNS[g.i];
+      const q = this.toSurface(p);
+      board.side = Math.max(0, (sx * (q[0] - g.anchor[0]) + sy * (q[1] - g.anchor[1])) / 2);
+      board.x = g.anchor[0] + (sx * board.side) / 2;
+      board.y = g.anchor[1] + (sy * board.side) / 2;
+    }
+    const previous = this.board;
+    this.board = board;
+    if (!valid(this.corners)) this.board = previous;
+    this.changed();
   }
 
-  drop() {
-    this.active = null;
-    this.render();
+  drop(e) {
+    this.pointers.delete(e.pointerId);
+    if (this.pointers.size === 0) this.gesture = null;
+    else if (this.gesture?.kind === "pinch") this.gesture = null; // one finger left: wait for a new grab
+    this.changed();
   }
 
-  render() {
-    this.dots.forEach((dot, i) => {
-      const [x, y] = this.corners[i] ?? [0, 0];
-      dot.style.transform = `translate(${x}px, ${y}px)`;
-      dot.classList.toggle("active", this.active === i);
+  /** Draw the handles and report the corners on the next animation frame. */
+  changed() {
+    if (this.frame) return;
+    this.frame = requestAnimationFrame(() => {
+      this.frame = 0;
+      const corners = this.corners;
+      this.dots.forEach((dot, i) => {
+        dot.style.transform = `translate(${corners[i][0]}px, ${corners[i][1]}px)`;
+        dot.classList.toggle("active", this.gesture?.i === i);
+      });
+      this.onChange(corners);
     });
   }
+}
+
+/** A convex quadrilateral whose sides are all at least MIN_SIDE long. */
+function valid(corners) {
+  if (!corners.flat().every(Number.isFinite)) return false;
+  const sides = corners.map(([x, y], i) => Math.hypot(corners[(i + 1) % 4][0] - x, corners[(i + 1) % 4][1] - y));
+  return Math.min(...sides) >= MIN_SIDE && convex(corners);
+}
+
+function convex(corners) {
+  const turns = corners.map(([x1, y1], i) => {
+    const [x2, y2] = corners[(i + 1) % 4];
+    const [x3, y3] = corners[(i + 2) % 4];
+    return Math.sign((x2 - x1) * (y3 - y2) - (y2 - y1) * (x3 - x2));
+  });
+  return turns.every((t) => t > 0) || turns.every((t) => t < 0);
 }
 
 /** Is the point inside the convex quadrilateral? */
@@ -111,6 +193,13 @@ export class Game {
     this.typed = emptyGrid();
     this.ink = emptyGrid();
     this.hints = new Set();
+    this.showSolution = false;
+  }
+
+  /** Clear the tapped digits, hints and the shown solution (pen digits stay: they are on paper). */
+  reset() {
+    this.typed = emptyGrid();
+    this.hints.clear();
     this.showSolution = false;
   }
 
