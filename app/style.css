@@ -16,6 +16,7 @@
 
 html, body {
   margin: 0;
+  touch-action: manipulation; /* no double-tap zoom */
   height: 100%;
   overflow: hidden;
   background: var(--bg);
@@ -48,7 +49,7 @@ button.link { border: 0; min-height: 32px; color: var(--muted); text-decoration:
 button:disabled { opacity: 0.35; cursor: default; }
 
 .row { display: flex; gap: 10px; justify-content: center; }
-.row > button { flex: 1; max-width: 140px; }
+.row > button { flex: 1; max-width: 140px; padding: 0 8px; }
 .note { margin: 0; color: var(--muted); font-size: 13px; text-align: center; }
 
 .pill {
@@ -92,7 +93,15 @@ body[data-view="play"] .controls[data-for="play"] { display: flex; }
 
 /* ---------- stage: camera picture, board and handles ---------- */
 
-.stage { position: fixed; inset: 0; background: #000; overflow: hidden; }
+.stage {
+  position: fixed;
+  inset: 0;
+  background: #000;
+  overflow: hidden;
+  touch-action: none; /* no zooming or scrolling the camera view */
+  user-select: none;
+  -webkit-user-select: none;
+}
 .stage video, .stage #still {
   position: absolute;
   inset: 0;
@@ -152,7 +161,7 @@ body[data-view="place"] .handles { display: block; }
 .controls .link { align-self: center; }
 
 .segmented { display: flex; align-self: center; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
-.segmented button { border: 0; border-radius: 0; min-width: 90px; }
+.segmented button { border: 0; border-radius: 0; min-width: 90px; min-height: 38px; }
 .segmented button.on { background: var(--accent); font-weight: 600; }
 
 /* ---------- typing a puzzle ---------- */

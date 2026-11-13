@@ -12,9 +12,11 @@ sys.path[:0] = [ROOT, os.path.join(ROOT, "app", "py"), os.path.dirname(__file__)
 
 import bridge  # noqa: E402
 import track  # noqa: E402
+from sudoku_cv.detect import get_homography  # noqa: E402
 from generate import GIVENS, count_solutions, generate  # noqa: E402
 from sudoku_cv.solver import is_valid  # noqa: E402
-from synthetic import PUZZLE, TILTED, printed_scene, scene, SIZE, CELL  # noqa: E402
+from synthetic import PUZZLE, TILTED, handdrawn_scene, printed_scene, scene, SIZE, CELL  # noqa: E402
+from sudoku_cv import handdrawn, process_image, solve  # noqa: E402
 from track import SurfaceTracker, transform  # noqa: E402
 
 SHEET = np.float32([[170, 40], [470, 60], [455, 450], [150, 430]])
@@ -120,7 +122,8 @@ class TrackTest(unittest.TestCase):
         self.assertEqual(tracker.state, "lost")
 
         moved, move = camera_move(frame, 30, 10, 5)
-        tracker.update(gray(moved))
+        for _ in range(track.ORB_EVERY):  # ORB, which finds the board again, runs every few frames
+            tracker.update(gray(moved))
         self.assertEqual(tracker.state, "tracking")
         self.assertLess(np.abs(tracker.corners - transform(self.board, move)).max(), 3)
 
@@ -139,6 +142,60 @@ class TrackTest(unittest.TestCase):
         moved, move = camera_move(frame, 15, 5, 3)
         tracker.update(gray(moved))
         self.assertLess(np.abs(tracker.corners - transform(board, move)).max(), 4)
+
+
+class HandDrawnTest(unittest.TestCase):
+    digits = {(0, 6): 9, (3, 0): 8, (6, 8): 7, (4, 4): 5}
+
+    def test_finds_the_drawn_lines(self):
+        frame, crossings = handdrawn_scene(self.digits)
+        board, mesh = handdrawn.find_board(frame)
+        error = np.abs(handdrawn.transform(mesh, get_homography(board)) - crossings).max(axis=2)
+        self.assertLess(error[1:-1, 1:-1].max(), 3)  # inner crossings
+        self.assertLess(error.max(), 10)  # the border's, where lines end, are less exact
+
+    def test_reads_and_solves_a_drawn_puzzle(self):
+        frame, _ = handdrawn_scene(self.digits)
+        result = process_image(frame)
+        self.assertEqual(result["status"], "solved")
+        self.assertTrue(result["drawn"])
+        found = {(r, c) for r in range(9) for c in range(9) if result["givens"][r][c]}
+        self.assertEqual(found, set(self.digits))
+
+    def test_live_camera_pins_a_drawn_board(self):
+        frame, _ = handdrawn_scene(self.digits)
+        bridge.reset()
+        results = [bridge.paper_frame(rgba(frame)) for _ in range(bridge.HANDDRAWN_EVERY)]
+        self.assertTrue(results[-1].get("pinned"))
+        self.assertEqual(bridge.follow(rgba(frame))["track"], "tracking")
+
+    def test_ruled_paper_alone_is_not_a_board(self):
+        frame, _ = handdrawn_scene({})
+        cv2.rectangle(frame, (0, 0), (640, 480), (215, 222, 228), -1)
+        for x in range(8, 640, 18):
+            cv2.line(frame, (x, 0), (x + 6, 480), (205, 170, 140), 1, cv2.LINE_AA)
+        self.assertIsNone(handdrawn.find_board(frame))
+
+    def test_printed_puzzles_keep_the_printed_path(self):
+        self.assertNotIn("drawn", process_image(printed_scene()))
+        self.assertNotIn("drawn", bridge.read_at(rgba(printed_scene()), TILTED.tolist()))
+
+
+class SolverTest(unittest.TestCase):
+    def test_gives_up_on_a_grid_with_no_solution(self):
+        # breaks no rule, but has no solution: the old search took minutes to find that out
+        grid = [[0] * 9 for _ in range(9)]
+        for (r, c), d in {(0, 6): 1, (3, 0): 1, (6, 8): 1, (4, 4): 1, (2, 2): 3, (7, 1): 4,
+                          (1, 5): 4, (5, 7): 6}.items():
+            grid[r][c] = d
+        self.assertEqual(solve(grid)["status"], "no_solution")
+
+    def test_solves_a_hard_17_clue_puzzle(self):
+        rows = ["000000010", "400000000", "020000000", "000050407", "008000300", "001090000",
+                "300400200", "050100000", "000806000"]
+        result = solve([[int(d) for d in row] for row in rows])
+        self.assertEqual(result["status"], "solved")
+        self.assertTrue(is_valid(result["solution"]))
 
 
 class BridgeTest(unittest.TestCase):

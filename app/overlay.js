@@ -75,6 +75,30 @@ function matrix3d([[a, b, c], [d, e, f], [g, h, i]]) {
   return `matrix3d(${a},${d},0,${g},${b},${e},0,${h},0,0,1,0,${c},${f},0,${i})`;
 }
 
+/**
+ * Homography from a flat surface to the screen, for a surface tilted by `tilt` radians away from
+ * the camera about the screen's horizontal axis (0: facing the camera; larger: a table seen at
+ * a slant, its far side at the top). Surface units are screen pixels at `centre`, which the
+ * surface origin maps to. `focal` is the camera's focal length in screen pixels.
+ */
+export function tiltedSurface(tilt, focal, [cx, cy]) {
+  const s = Math.sin(tilt) / focal;
+  return [
+    [1, -cx * s, cx],
+    [0, Math.cos(tilt) - cy * s, cy],
+    [0, -s, 1],
+  ];
+}
+
+/** Is the point inside the convex quadrilateral? */
+export function contains(quad, [x, y]) {
+  const signs = quad.map(([x1, y1], i) => {
+    const [x2, y2] = quad[(i + 1) % 4];
+    return Math.sign((x2 - x1) * (y - y1) - (y2 - y1) * (x - x1));
+  });
+  return signs.every((s) => s >= 0) || signs.every((s) => s <= 0);
+}
+
 /** The cell [row, col] at a point of the board (in the same coordinates as `corners`), or null. */
 export function cellAt(corners, point) {
   const [x, y] = apply(invert(squareToQuad(corners)), point);
@@ -94,10 +118,17 @@ export class Stage {
     this.element = element;
     this.board = boardCanvas;
     this.frame = { width: 640, height: 480 };
+    this.size = null;
+  }
+
+  /** Call when the stage may have changed size (window resized, stage shown). */
+  measure() {
+    this.size = null;
   }
 
   fit() {
-    const { clientWidth: w, clientHeight: h } = this.element;
+    this.size ??= [this.element.clientWidth, this.element.clientHeight];
+    const [w, h] = this.size;
     const scale = Math.min(w / this.frame.width, h / this.frame.height);
     return { scale, x: (w - this.frame.width * scale) / 2, y: (h - this.frame.height * scale) / 2 };
   }
@@ -121,11 +152,18 @@ export class Stage {
 
 // ---------- the flat board image ----------
 
+const drawn = new WeakMap(); // canvas -> the board drawn on it
+
 /**
  * Draw the board: an optional background and grid lines, and a list of cells
- * {r, c, digit, color, fill, outline}.
+ * {r, c, digit, color, fill, outline}. Skipped when the canvas already shows this board, so
+ * moving the board (only its CSS transform changes) costs no drawing.
  */
-export function drawBoard(canvas, { lines = null, background = null, cells = [] } = {}) {
+export function drawBoard(canvas, board = {}) {
+  const key = JSON.stringify(board);
+  if (drawn.get(canvas) === key) return;
+  drawn.set(canvas, key);
+  const { lines = null, background = null, cells = [] } = board;
   const ctx = canvas.getContext("2d");
   const k = canvas.width / SIZE;
   ctx.setTransform(k, 0, 0, k, 0, 0);
@@ -148,21 +186,9 @@ export function drawBoard(canvas, { lines = null, background = null, cells = [] 
   }
 
   if (lines) {
-    ctx.save();
-    ctx.strokeStyle = lines;
-    ctx.shadowColor = "rgba(0, 0, 0, 0.6)"; // keeps white lines visible on white paper
-    ctx.shadowBlur = 3;
-    for (let i = 0; i <= 9; i++) {
-      ctx.lineWidth = i % 3 === 0 ? 3 : 1;
-      const p = Math.min(Math.max(i * CELL, 1.5), SIZE - 1.5);
-      ctx.beginPath();
-      ctx.moveTo(p, 0);
-      ctx.lineTo(p, SIZE);
-      ctx.moveTo(0, p);
-      ctx.lineTo(SIZE, p);
-      ctx.stroke();
-    }
-    ctx.restore();
+    // A thin dark edge under each line keeps white lines visible on white paper.
+    strokeGrid(ctx, "rgba(0, 0, 0, 0.45)", 2);
+    strokeGrid(ctx, lines, 0);
   }
 
   ctx.font = "600 34px system-ui, -apple-system, sans-serif";
@@ -172,6 +198,20 @@ export function drawBoard(canvas, { lines = null, background = null, cells = [] 
     if (!digit) continue;
     ctx.fillStyle = color;
     ctx.fillText(String(digit), c * CELL + CELL / 2, r * CELL + CELL / 2 + 2);
+  }
+}
+
+function strokeGrid(ctx, color, extraWidth) {
+  ctx.strokeStyle = color;
+  for (let i = 0; i <= 9; i++) {
+    ctx.lineWidth = (i % 3 === 0 ? 3 : 1) + extraWidth;
+    const p = Math.min(Math.max(i * CELL, 1.5), SIZE - 1.5);
+    ctx.beginPath();
+    ctx.moveTo(p, 0);
+    ctx.lineTo(p, SIZE);
+    ctx.moveTo(0, p);
+    ctx.lineTo(SIZE, p);
+    ctx.stroke();
   }
 }
 

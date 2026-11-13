@@ -43,17 +43,69 @@ def fewest_candidates_cell(grid):
     return best
 
 
+MAX_STEPS = 50000  # guesses before giving up
+ALL_DIGITS = 0b1111111110  # bit d set for digits 1..9
+
+
 def backtrack(grid):
-    best = fewest_candidates_cell(grid)
-    if best is None:
-        return True
-    r, c, cand = best
-    for d in cand:
-        grid[r][c] = d
-        if backtrack(grid):
+    """Fill the grid in place. False if it has no solution, or if finding out takes more than
+    MAX_STEPS guesses: a misread digit can make a grid that breaks no rule yet has no solution,
+    and proving that by search can take minutes.
+
+    The digits used in each row, column and box are kept as bit sets and updated as digits are
+    placed, so each step costs a few bit operations per empty cell; the cell with the fewest
+    candidates is filled first."""
+    rows, cols, boxes = [0] * 9, [0] * 9, [0] * 9
+    empty = []
+    for r in range(9):
+        for c in range(9):
+            if grid[r][c]:
+                bit = 1 << grid[r][c]
+                rows[r] |= bit
+                cols[c] |= bit
+                boxes[3 * (r // 3) + c // 3] |= bit
+            else:
+                empty.append((r, c))
+    steps = [MAX_STEPS]
+
+    def search():
+        if not empty:
             return True
-    grid[r][c] = 0
-    return False
+        steps[0] -= 1
+        if steps[0] < 0:
+            return False
+        best, best_free, best_count = 0, 0, 10
+        for i, (r, c) in enumerate(empty):
+            free = ALL_DIGITS & ~(rows[r] | cols[c] | boxes[3 * (r // 3) + c // 3])
+            count = bin(free).count("1")
+            if count < best_count:
+                best, best_free, best_count = i, free, count
+                if count <= 1:
+                    break
+        if best_count == 0:
+            return False
+        r, c = empty[best]
+        b = 3 * (r // 3) + c // 3
+        empty[best] = empty[-1]
+        empty.pop()
+        for d in range(1, 10):
+            bit = 1 << d
+            if best_free & bit:
+                rows[r] |= bit
+                cols[c] |= bit
+                boxes[b] |= bit
+                grid[r][c] = d
+                if search():
+                    return True
+                rows[r] &= ~bit
+                cols[c] &= ~bit
+                boxes[b] &= ~bit
+        grid[r][c] = 0
+        empty.append((r, c))
+        empty[best], empty[-1] = empty[-1], empty[best]
+        return False
+
+    return search()
 
 
 def next_cell(grid):

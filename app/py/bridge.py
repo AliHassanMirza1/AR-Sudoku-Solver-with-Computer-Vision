@@ -12,18 +12,21 @@ import json
 import cv2
 import numpy as np
 
-from sudoku_cv import SudokuTracker, process_image, solve
-from sudoku_cv.detect import warp_grid
+from sudoku_cv import SudokuTracker, handdrawn, process_image, solve
+from sudoku_cv.detect import GRID_SCORE_THRESHOLD, grid_score, threshold, warp_grid
 from sudoku_cv.digits import cell_masks, get_data, hog_features, knn_classify, normalize_digit, read_digits
-from sudoku_cv.tracker import make_result
+from sudoku_cv.tracker import find_drawn, make_result, read_drawn
 
 from generate import generate as generate_puzzle
 from track import SurfaceTracker, board_on_sheet, find_sheet
 
-READ_STILL_FRAMES = 5
+READ_STILL_FRAMES = 5  # pen digits are read once the board has been still this long,
+READ_EVERY_FRAMES = 15  # and again every 15 frames while it stays still (reading takes ~25 ms)
+HANDDRAWN_EVERY = 5  # while no grid is found, look for a hand-drawn one every 5th frame (~30 ms)
 
 paper_tracker = SudokuTracker()
 surface = None
+misses = 0  # frames in a row without a grid
 
 
 def gray_of(frame):
@@ -33,19 +36,36 @@ def gray_of(frame):
 # paper puzzle (mode A)
 
 def paper_frame(frame):
-    """Live camera: find, read and solve the puzzle (Leonardo's tracker)."""
-    return paper_tracker.process_frame(frame)
+    """Live camera: find, read and solve the puzzle (Leonardo's tracker). When it finds no grid,
+    look for a hand-drawn one now and then; once found, the surface tracker follows it and the
+    result says pinned=True."""
+    global misses
+    result = paper_tracker.process_frame(frame)
+    misses = misses + 1 if result["status"] == "no_grid" else 0
+    if misses and misses % HANDDRAWN_EVERY == 0:
+        drawn = find_drawn(frame)
+        if drawn is not None:
+            pin(frame, drawn["corners"], around=False)
+            drawn["pinned"] = True
+            return drawn
+    return result
 
 
 def photo(frame):
-    """A single photo: find, read and solve the puzzle."""
+    """A single photo: find, read and solve the puzzle, printed or hand-drawn."""
     return process_image(frame)
 
 
 def read_at(frame, corners):
-    """Read and solve the puzzle inside 4 corners the user placed by hand."""
+    """Read and solve the puzzle inside 4 corners the user placed by hand. If the grid there
+    is not even (hand-drawn), its own lines are found and used."""
     corners = np.float32(corners)
-    givens, user_digits, confidence = read_digits(warp_grid(gray_of(frame), corners))
+    flat = warp_grid(gray_of(frame), corners)
+    if grid_score(threshold(flat)) < GRID_SCORE_THRESHOLD:
+        found = handdrawn.find_board(cv2.cvtColor(frame, cv2.COLOR_RGBA2BGR), corners)
+        if found is not None:
+            return read_drawn(frame, *found)
+    givens, user_digits, confidence = read_digits(flat)
     return make_result(corners, givens, user_digits, confidence, solve(givens, user_digits))
 
 
@@ -56,9 +76,10 @@ def set_givens(givens, user_digits):
 
 
 def reset():
-    global surface
+    global surface, misses
     paper_tracker.reset()
     surface = None
+    misses = 0
     return {}
 
 
@@ -83,10 +104,10 @@ def follow(frame, givens=None):
     gray = gray_of(frame)
     surface.update(gray)
     ink = None
+    still = surface.still_count - READ_STILL_FRAMES
     if (givens is not None and surface.on_sheet and surface.state == "tracking"
-            and surface.still_count >= READ_STILL_FRAMES):
+            and still >= 0 and still % READ_EVERY_FRAMES == 0):
         ink = read_handwritten(gray, surface.corners, givens)
-        surface.still_count = 0
     return board_state(ink)
 
 
