@@ -1,3 +1,7 @@
+MAX_STEPS = 20000  # guesses before giving up
+ALL_DIGITS = 0b1111111110  # bit d set for digits 1..9
+
+
 def copy_grid(grid):
     return [[int(d) for d in row] for row in grid]
 
@@ -43,18 +47,7 @@ def fewest_candidates_cell(grid):
     return best
 
 
-MAX_STEPS = 50000  # guesses before giving up
-ALL_DIGITS = 0b1111111110  # bit d set for digits 1..9
-
-
 def backtrack(grid):
-    """Fill the grid in place. False if it has no solution, or if finding out takes more than
-    MAX_STEPS guesses: a misread digit can make a grid that breaks no rule yet has no solution,
-    and proving that by search can take minutes.
-
-    The digits used in each row, column and box are kept as bit sets and updated as digits are
-    placed, so each step costs a few bit operations per empty cell; the cell with the fewest
-    candidates is filled first."""
     rows, cols, boxes = [0] * 9, [0] * 9, [0] * 9
     empty = []
     for r in range(9):

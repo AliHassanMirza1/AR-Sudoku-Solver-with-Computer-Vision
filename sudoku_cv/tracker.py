@@ -7,7 +7,7 @@ from .digits import find_rotation, read_digits
 from .solver import copy_grid, solve
 
 REFERENCE_WIDTH = 640
-STABLE_FRAMES = 3  # a phone held in the hand rarely keeps the grid within a few pixels for long
+STABLE_FRAMES = 3
 STABLE_PIXELS = 8
 JUMP_PIXELS = 20
 SMOOTHING = 0.5
@@ -69,14 +69,14 @@ def process_image(image, debug=False):
     thresh = threshold(gray)
     corners = find_grid_contour(thresh)
     if corners is None:
-        drawn = find_drawn(image, photo=True)
-        return drawn or make_result(None, debug=debug_images(image, thresh, None) if debug else None)
+        debug = debug_images(image, thresh, None) if debug else None
+        return find_drawn(image, photo=True) or make_result(None, debug=debug)
 
     corners, flat, _ = upright_grid(gray, corners)
     debug = debug_images(image, thresh, corners) if debug else None
     givens, user_digits, confidence = read_digits(flat)
     solved = solve(givens, user_digits)
-    if solved["status"] != "solved":  # the grid may be uneven (hand-drawn), read with wrong cells
+    if solved["status"] != "solved":  # maybe hand-drawn
         drawn = find_drawn(image, even=True, photo=True)
         if drawn is not None and drawn["status"] == "solved":
             return drawn
@@ -86,16 +86,12 @@ def process_image(image, debug=False):
 # hand-drawn boards
 
 def find_drawn(image, even=False, photo=False):
-    """Find, read and solve a hand-drawn board (see handdrawn.find_board), or None. A single
-    photo is searched harder (handdrawn.find_board_in_photo)."""
     find = handdrawn.find_board_in_photo if photo else handdrawn.find_board
     found = find(to_bgr(image), even=even)
     return None if found is None else read_drawn(image, *found)
 
 
 def read_drawn(image, corners, mesh):
-    """Read and solve a hand-drawn board at known corners, from an image of any size. The result
-    has drawn=True and the board's mesh (its line crossings, in board coordinates)."""
     givens, confidence = handdrawn.read_board(to_bgr(image), corners, mesh)
     empty = [[0] * 9 for _ in range(9)]
     result = make_result(np.float32(corners), givens, empty, confidence, solve(givens, empty))
@@ -111,6 +107,7 @@ class SudokuTracker:
 
     def reset(self):
         self.corners = None
+        self.detected = None
         self.rotation = 0
         self.stable_count = 0
         self.lost_count = 0
@@ -125,7 +122,7 @@ class SudokuTracker:
         frame = to_bgr(frame)
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         thresh = threshold(gray)
-        corners = find_grid_contour(thresh)
+        corners = find_grid_contour(thresh, self.detected)
         scale = max(gray.shape) / REFERENCE_WIDTH
 
         if corners is None:
@@ -134,6 +131,7 @@ class SudokuTracker:
             if self.lost_count > LOST_FRAMES:
                 self.reset()
         else:
+            self.detected = corners
             corners = np.roll(corners, -self.rotation, axis=0)
             self.lost_count = 0
             self.update_corners(corners, scale)

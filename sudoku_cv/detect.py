@@ -20,6 +20,7 @@ HULL_EPSILONS = [0.02, 0.04, 0.06, 0.08]
 REFINE_THRESHOLD = 0.2
 REFINE_SIZE = 225
 REFINE_STEPS = [32, 16, 8, 4, 2, 1]
+TRACK_STEPS = [2, 1]
 
 
 # thresholding
@@ -59,8 +60,6 @@ def warp_grid(img, corners):
 
 
 def grid_score(flat_thresh):
-    """How well the 10 + 10 lines of an even grid are there: the weaker of the two directions,
-    because ruled paper or a striped surface has perfect lines one way and none the other."""
     size = flat_thresh.shape[0]
     band = max(1, round(LINE_BAND * size / SQUARE))
     rows, cols = [], []
@@ -91,9 +90,9 @@ def quad_from_hull(contour):
     return None
 
 
-def refine_corners(thresh, corners):
+def refine_corners(thresh, corners, steps=REFINE_STEPS):
     best = score_corners(thresh, corners, REFINE_SIZE)
-    for step in REFINE_STEPS:
+    for step in steps:
         improved = True
         while improved:
             improved = False
@@ -107,15 +106,7 @@ def refine_corners(thresh, corners):
     return corners
 
 
-def check_quad(thresh, corners, refine):
-    score = score_corners(thresh, corners)
-    if score > REFINE_THRESHOLD and (refine or score < GRID_SCORE_THRESHOLD):
-        corners = refine_corners(thresh, corners)
-        score = score_corners(thresh, corners)
-    return corners if score > GRID_SCORE_THRESHOLD else None
-
-
-def find_grid_contour(thresh):
+def find_grid_contour(thresh, previous=None):
     height, width = thresh.shape
     contours, _ = cv2.findContours(thresh, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
     contours = sorted(contours, key=cv2.contourArea, reverse=True)[:MAX_CANDIDATES]
@@ -125,10 +116,18 @@ def find_grid_contour(thresh):
         approx = cv2.approxPolyDP(contour, 0.02 * cv2.arcLength(contour, True), True)
         merged = len(approx) != 4 or not cv2.isContourConvex(approx)
         corners = quad_from_hull(contour) if merged else order_corners(approx)
-        if corners is not None:
-            corners = check_quad(thresh, corners, merged)
-        if corners is not None:
+        if corners is None:
+            continue
+        score = score_corners(thresh, corners)
+        if score > GRID_SCORE_THRESHOLD and not merged:
             return corners
+        if score > REFINE_THRESHOLD:
+            if previous is not None:
+                corners = refine_corners(thresh, previous.copy(), TRACK_STEPS)
+            else:
+                corners = refine_corners(thresh, corners)
+            if score_corners(thresh, corners) > GRID_SCORE_THRESHOLD:
+                return corners
     return None
 
 

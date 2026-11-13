@@ -102,11 +102,11 @@ def hog_features(digits):
     bins = np.minimum((angle / np.pi * HOG_BINS).astype(int), HOG_BINS - 1)
 
     cells = DIGIT_SIZE // HOG_CELL
-    hist = np.zeros((n, cells, cells, HOG_BINS), np.float32)
-    for b in range(HOG_BINS):
-        m = np.where(bins == b, magnitude, 0)
-        hist[..., b] = m.reshape(n, cells, HOG_CELL, cells, HOG_CELL).sum(axis=(2, 4))
-    hist = hist.reshape(n, -1)
+    cell = np.arange(DIGIT_SIZE) // HOG_CELL
+    index = (cell[:, None] * cells + cell[None, :]) * HOG_BINS + bins
+    index += np.arange(n)[:, None, None] * cells * cells * HOG_BINS
+    size = n * cells * cells * HOG_BINS
+    hist = np.bincount(index.ravel(), magnitude.ravel(), size).reshape(n, -1).astype(np.float32)
     return hist / (np.linalg.norm(hist, axis=1, keepdims=True) + 1e-6)
 
 
