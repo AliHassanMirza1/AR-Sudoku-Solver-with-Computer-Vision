@@ -14,7 +14,7 @@ a small frame, then read it from a sharper one with read_board.
 import cv2
 import numpy as np
 
-from .detect import SQUARE, get_homography, grid_score, quad_from_hull, threshold
+from .detect import SQUARE, get_homography, grid_score, quad_from_hull, score_corners, threshold, warp_grid
 from .digits import read_digits
 
 FRAME_WIDTH = 640  # pixel sizes below are for frames this wide; larger frames are scaled
@@ -22,17 +22,29 @@ FRAME_WIDTH = 640  # pixel sizes below are for frames this wide; larger frames a
 RULED_VOTES = 0.6  # a ruled line is straight for at least this share of the frame's short side
 RULED_WIDTH = 2
 COLOUR_RATIO = 0.1  # blue-minus-red shift per unit of darkness above which a pixel is coloured
+FAINT = 0.3  # on a ruled line, pixels less dark than this share of the paper are the line alone
 MIN_AREA_RATIO = 0.05
+STRAY_WIDTH = 25  # strokes thinner than this hanging off the board are not part of its outline
 MAX_CANDIDATES = 5
 STRIPS = 18  # strips across the lines when following them
 REACH = 4  # a line may wander this many pixels within one strip
 GAP = 6  # gaps up to twice this long along a line are bridged (where a ruled line crossed it)
 LINE_COVER = 0.75  # share of a strip's length a line must cross
+SLANTS = np.tan(np.radians([-20, -10, 0, 10, 20]))  # slants a line may cross a strip at
 LINK_PIXELS = 12  # a line moves at most this much from one strip to the next
 MIN_SPAN = 0.4  # share of the strips a line must be found in (dashed or short lines)
 MIN_CELL, MAX_CELL = 0.4, 2.0  # cell size limits, in even cells
-MIN_GRID_SCORE = 0.3  # lower than sudoku_cv: drawn lines are dashed where ruled lines crossed
+MISSING_GAP = 1.6  # a gap this many times the usual spacing has a line missing in it
+MIN_SUPPORT = 0.15  # share of a guessed outer line that must run over ink
+MIN_GRID_SCORE = 0.35  # lower than detect.py's: drawn lines are dashed where ruled lines crossed
+EVEN_SCORE = 0.55  # a board whose even grid scores this well (detect.py) is printed, not drawn
+PHOTO_TRIES = [(0, 1), (0, 0.9), (3, 1), (-3, 1), (0, 0.8), (3, 0.9), (-3, 0.9)]  # (degrees, zoom)
+NO_GRID_SCORE = 0.12  # below this, no grid at all (drawn boards score 0.16 and more)
 OUTLINE_MARGIN = 0.04  # the outline is rough: look a little outside it for the border lines
+
+
+# the crossings of a straight, even grid, in board coordinates
+EVEN_MESH = np.stack(np.meshgrid(np.arange(10), np.arange(10)), axis=-1).astype(np.float32) * SQUARE / 9
 
 
 # cleaning
@@ -63,8 +75,10 @@ def clean_gray(bgr):
     paper = cv2.dilate(gray, np.ones((odd(5 * scale),) * 2, np.uint8))
     tint = bgr[..., 0].astype(np.float32) - bgr[..., 2].astype(np.float32)  # blue minus red
     paper_tint = cv2.medianBlur((tint + 128).clip(0, 255).astype(np.uint8), min(odd(21 * scale), 255))
-    coloured = np.abs(tint - paper_tint.astype(np.float32) + 128) > COLOUR_RATIO * (paper.astype(np.float32) - gray)
-    return np.where((straight > 0) & coloured, paper, gray)
+    darkness = paper.astype(np.float32) - gray
+    coloured = np.abs(tint - paper_tint.astype(np.float32) + 128) > COLOUR_RATIO * darkness
+    faint = darkness < FAINT * paper  # lighter than pen: only the printed line is there
+    return np.where((straight > 0) & (coloured | faint), paper, gray)
 
 
 def odd(size):
@@ -74,15 +88,26 @@ def odd(size):
 # outline
 
 def outlines(thresh):
-    """Rough 4-sided outlines of the largest shapes, largest first."""
+    """Rough 4-sided outlines of the largest shapes in a threshold image, largest first.
+
+    The strokes are thickened so the board's dashed lines join into one shape. Stray strokes
+    can hang off it (a ruled line that was not removed, the page's edge); filled in, the board
+    is a solid area and they are thin, so an opening removes them. Both outlines are tried."""
     height, width = thresh.shape
-    contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    thick = cv2.dilate(thresh, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7)))
+    contours, _ = cv2.findContours(thick, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    opening = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (STRAY_WIDTH, STRAY_WIDTH))
     for contour in sorted(contours, key=cv2.contourArea, reverse=True)[:MAX_CANDIDATES]:
         if cv2.contourArea(contour) < MIN_AREA_RATIO * height * width:
             return
-        corners = quad_from_hull(contour)
-        if corners is not None:
-            yield corners
+        solid = np.zeros_like(thick)
+        cv2.drawContours(solid, [contour], -1, 255, -1)
+        solid = cv2.morphologyEx(solid, cv2.MORPH_OPEN, opening)
+        trimmed, _ = cv2.findContours(solid, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        for shape in sorted(trimmed, key=cv2.contourArea, reverse=True)[:1] + [contour]:
+            corners = quad_from_hull(shape)
+            if corners is not None:
+                yield corners
 
 
 # drawn lines
@@ -97,7 +122,7 @@ def follow_lines(ink):
     """The roughly vertical lines in a square ink image, each as a curve x = f(y), left to right.
 
     The image is cut into horizontal strips; in each strip a line is a column band that most
-    rows have ink in (within REACH pixels, so slanted lines count, and with gaps up to 2 GAP
+    rows have ink in, along one of SLANTS (within REACH pixels, and with gaps up to 2 GAP
     bridged, so dashed lines count). Bands are linked from strip to strip, and lines found in
     enough strips become curves.
     """
@@ -106,9 +131,14 @@ def follow_lines(ink):
     near = cv2.dilate(ink, np.ones((1, 2 * REACH + 1), np.uint8))
     near = cv2.morphologyEx(near, cv2.MORPH_CLOSE, np.ones((2 * GAP + 1, 1), np.uint8)) > 0
     chains = []  # each a list of (y, x)
+    rows = np.arange(strip)[:, None]
     for k in range(STRIPS):
         y = (k + 0.5) * strip
-        cover = near[k * strip:(k + 1) * strip].mean(axis=0)
+        band = near[k * strip:(k + 1) * strip]
+        cover = np.zeros(size)
+        for slant in SLANTS:  # a slanted line covers the strip along its slant
+            shift = np.round((np.arange(strip) - strip / 2) * slant).astype(int)[:, None]
+            cover = np.maximum(cover, band[rows, (np.arange(size) + shift) % size].mean(axis=0))
         for x in line_centres(cover >= LINE_COVER):
             open_chains = [c for c in chains if c[-1][0] < y and abs(c[-1][1] - x) < LINK_PIXELS]
             if open_chains:
@@ -139,10 +169,63 @@ class Curve:
         return np.interp(t, self.ts, self.xs)
 
 
+def fill_missing(curves, ink):
+    """Up to 2 lines a strip-by-strip search missed (too faint or dashed). Where a gap between
+    neighbours is about twice the usual spacing, a line halfway between them; otherwise an
+    outer line one spacing beyond the first or last line, on the side with more ink along it."""
+    size = ink.shape[0]
+    for _ in range(10 - len(curves)):
+        if not 8 <= len(curves) < 10:
+            break
+        middles = [f(size / 2) for f in curves]
+        gaps = np.diff(middles)
+        spacing = np.median(gaps)
+        widest = int(np.argmax(gaps))
+        if gaps[widest] >= MISSING_GAP * spacing:
+            curves.insert(widest + 1, Between(curves[widest], curves[widest + 1]))
+            continue
+        before, after = Shifted(curves[0], -spacing), Shifted(curves[-1], spacing)
+        best = max((before, after), key=lambda f: support(ink, f))
+        if support(ink, best) < MIN_SUPPORT:
+            break
+        curves.insert(0 if best is before else len(curves), best)
+    return curves
+
+
+def support(ink, curve):
+    """Share of a curve x = f(y) that runs over ink (0 where it leaves the image)."""
+    size = ink.shape[0]
+    t = np.arange(0, size, 2)
+    x = np.round([curve(v) for v in t]).astype(int)
+    inside = (x >= 0) & (x < size)
+    near = cv2.dilate(ink, np.ones((1, 2 * REACH + 1), np.uint8))
+    return float((near[t[inside], x[inside]] > 0).sum()) / len(t)
+
+
+class Shifted:
+    """A curve moved sideways."""
+
+    def __init__(self, curve, shift):
+        self.curve, self.shift = curve, shift
+
+    def __call__(self, t):
+        return self.curve(t) + self.shift
+
+
+class Between:
+    """The curve halfway between two curves."""
+
+    def __init__(self, a, b):
+        self.a, self.b = a, b
+
+    def __call__(self, t):
+        return (self.a(t) + self.b(t)) / 2
+
+
 def find_mesh(ink):
     """The 10 x 10 crossings of the drawn lines in a square ink image, or None."""
-    verticals = follow_lines(ink)  # x = f(y)
-    horizontals = follow_lines(ink.T)  # y = g(x)
+    verticals = fill_missing(follow_lines(ink), ink)  # x = f(y)
+    horizontals = fill_missing(follow_lines(ink.T), ink.T)  # y = g(x)
     if len(verticals) != 10 or len(horizontals) != 10:
         return None
     mesh = np.zeros((10, 10, 2), np.float32)
@@ -207,14 +290,16 @@ def cell_sizes(mesh):
     return width, height
 
 
-def find_board(bgr, corners=None):
+def find_board(bgr, corners=None, even=False):
     """A hand-drawn board in a frame up to FRAME_WIDTH wide: its 4 corners and the mesh of its
-    line crossings (board coordinates), or None. With `corners`, look only there."""
+    line crossings (board coordinates), or None. With `corners`, look only there.
+
+    A board whose lines are straight and even is left to the usual reader (it tells printed
+    givens from handwritten answers), unless `even`: the usual reader already failed on it."""
     clean = clean_gray(bgr)
     thresh = threshold(clean)
     if corners is None:
-        thick = cv2.dilate(thresh, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7)))
-        candidates = outlines(thick)
+        candidates = outlines(thresh)
     else:
         candidates = [np.float32(corners)]
     for outline in candidates:
@@ -227,9 +312,31 @@ def find_board(bgr, corners=None):
         mesh = transform(mesh, get_homography(region))  # frame coordinates
         board = np.float32([mesh[0, 0], mesh[0, -1], mesh[-1, -1], mesh[-1, 0]])
         mesh = transform(mesh, np.linalg.inv(get_homography(board)))  # board coordinates
+        if not even and score_corners(thresh, board) >= EVEN_SCORE:
+            return None  # straight, even lines: a printed grid, read by the usual path
         if grid_score(threshold(even_board(clean, board, mesh))) >= MIN_GRID_SCORE:
             return board, mesh
     return None
+
+
+def find_board_in_photo(bgr, even=False):
+    """find_board for a single photo, which gets one chance where live video gets many frames:
+    also try slightly turned and zoomed copies, and map what is found back to the photo."""
+    height, width = bgr.shape[:2]
+    for degrees, scale in PHOTO_TRIES:
+        turn = cv2.getRotationMatrix2D((width / 2, height / 2), degrees, scale)
+        copy = cv2.warpAffine(bgr, turn, (width, height), borderMode=cv2.BORDER_REPLICATE)
+        found = find_board(copy, even=even)
+        if found is not None:
+            corners, mesh = found  # the mesh is in board coordinates: it stays as it is
+            back = cv2.invertAffineTransform(turn)
+            return cv2.transform(corners.reshape(-1, 1, 2), back).reshape(4, 2), mesh
+    return None
+
+
+def no_grid(bgr, corners):
+    """Is there nothing like a grid inside these corners (a face, a table, blank paper)?"""
+    return grid_score(threshold(warp_grid(clean_gray(bgr), np.float32(corners)))) < NO_GRID_SCORE
 
 
 def read_board(bgr, corners, mesh):

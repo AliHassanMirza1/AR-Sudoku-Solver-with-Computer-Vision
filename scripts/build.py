@@ -4,8 +4,9 @@ _site/
   app/*           the page, worker and styles
   py.zip          sudoku_cv/ (code and .npz data) and app/py/*.py, unpacked by the worker
   pyodide/        a pinned copy of Pyodide with numpy and OpenCV, served from our own site
+  vendor/         pinned browser libraries (a HEIC photo decoder, loaded only when needed)
 
-Pyodide downloads are kept in .cache/ so later builds work offline.
+Downloads are kept in .cache/ so later builds work offline.
 Run: python3 scripts/build.py, then python3 -m http.server -d _site 8000
 """
 
@@ -20,22 +21,34 @@ PYODIDE_URL = f"https://cdn.jsdelivr.net/pyodide/v{PYODIDE_VERSION}/full/"
 PYODIDE_CORE = ["pyodide.mjs", "pyodide.asm.mjs", "pyodide.asm.wasm", "python_stdlib.zip",
                 "pyodide-lock.json"]
 PYTHON_PACKAGES = ["numpy", "opencv-python"]
+VENDOR = {  # for browsers that cannot open iPhone (HEIC) photos themselves
+    "heic-to.min.js": "https://cdn.jsdelivr.net/npm/heic-to@1.6.7/dist/heic-to.min.js",
+}
 
 ROOT = Path(__file__).resolve().parent.parent
 APP = ROOT / "app"
 SITE = ROOT / "_site"
 CACHE = ROOT / ".cache" / f"pyodide-{PYODIDE_VERSION}"
+VENDOR_CACHE = ROOT / ".cache" / "vendor"
 
 
-def download(name):
-    path = CACHE / name
+def download(name, url=None, cache=CACHE):
+    """A file from Pyodide's release (or from `url`), downloaded once into the cache."""
+    path = cache / name
     if not path.exists():
         print("downloading", name)
-        CACHE.mkdir(parents=True, exist_ok=True)
-        with urllib.request.urlopen(PYODIDE_URL + name) as response:
+        cache.mkdir(parents=True, exist_ok=True)
+        with urllib.request.urlopen(url or PYODIDE_URL + name) as response:
             path.with_suffix(".part").write_bytes(response.read())
         path.with_suffix(".part").rename(path)
     return path
+
+
+def copy_vendor():
+    target = SITE / "vendor"
+    target.mkdir()
+    for name, url in VENDOR.items():
+        shutil.copy(download(name, url, VENDOR_CACHE), target / name)
 
 
 def package_files(lock, names):
@@ -83,6 +96,7 @@ def main():
     shutil.copytree(APP, SITE, ignore=shutil.ignore_patterns("py", ".DS_Store", "__pycache__"))
     zip_python()
     copy_pyodide()
+    copy_vendor()
     size = sum(f.stat().st_size for f in SITE.rglob("*") if f.is_file())
     print(f"built {SITE.relative_to(ROOT)}/ ({size / 1e6:.1f} MB)")
 

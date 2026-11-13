@@ -165,7 +165,7 @@ class HandDrawnTest(unittest.TestCase):
     def test_live_camera_pins_a_drawn_board(self):
         frame, _ = handdrawn_scene(self.digits)
         bridge.reset()
-        results = [bridge.paper_frame(rgba(frame)) for _ in range(bridge.HANDDRAWN_EVERY)]
+        results = [bridge.paper_frame(rgba(frame)) for _ in range(bridge.HANDDRAWN_AFTER)]
         self.assertTrue(results[-1].get("pinned"))
         self.assertEqual(bridge.follow(rgba(frame))["track"], "tracking")
 
@@ -176,9 +176,33 @@ class HandDrawnTest(unittest.TestCase):
             cv2.line(frame, (x, 0), (x + 6, 480), (205, 170, 140), 1, cv2.LINE_AA)
         self.assertIsNone(handdrawn.find_board(frame))
 
+    def test_corners_set_by_hand_on_a_drawn_board(self):
+        frame, crossings = handdrawn_scene(self.digits)
+        corners = np.float32([crossings[0, 0], crossings[0, -1], crossings[-1, -1], crossings[-1, 0]])
+        for shift in (0, 6):  # exact, or a little off as fingers place them
+            result = bridge.read_at(rgba(frame), (corners + shift).tolist())
+            self.assertTrue(result["drawn"])
+            self.assertEqual(result["user_digits"], [[0] * 9 for _ in range(9)])  # no green or red
+
+    def test_corners_set_where_there_is_no_grid(self):
+        corners = [[120, 90], [520, 100], [530, 400], [110, 390]]
+        self.assertEqual(bridge.read_at(rgba(scene(None)), corners)["status"], "no_grid")  # wood
+
     def test_printed_puzzles_keep_the_printed_path(self):
         self.assertNotIn("drawn", process_image(printed_scene()))
         self.assertNotIn("drawn", bridge.read_at(rgba(printed_scene()), TILTED.tolist()))
+
+
+class GridScoreTest(unittest.TestCase):
+    def test_lines_one_way_are_not_a_grid(self):
+        from sudoku_cv.detect import grid_score
+        flat = np.zeros((SIZE, SIZE), np.uint8)
+        for k in range(10):  # ruled paper: 10 even lines, but only one way
+            flat[min(k * CELL, SIZE - 2):min(k * CELL, SIZE - 2) + 2, :] = 255
+        self.assertLess(grid_score(flat), 0.1)
+        for k in range(10):
+            flat[:, min(k * CELL, SIZE - 2):min(k * CELL, SIZE - 2) + 2] = 255
+        self.assertGreater(grid_score(flat), 0.9)
 
 
 class SolverTest(unittest.TestCase):

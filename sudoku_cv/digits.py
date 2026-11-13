@@ -40,9 +40,10 @@ def extract_digit(cell_thresh):
     for i in range(1, n):
         x, y, w, h, area = stats[i]
         touches_border = x == 0 or y == 0 or x + w == size or y + h == size
+        crosses = (y == 0 and y + h == size) or (x == 0 and x + w == size)  # a line, not a digit
         centered = (abs(x + w / 2 - size / 2) < CENTER_RATIO * size
                     and abs(y + h / 2 - size / 2) < CENTER_RATIO * size)
-        if area >= MIN_COMPONENT_AREA and (centered or not touches_border):
+        if area >= MIN_COMPONENT_AREA and not crosses and (centered or not touches_border):
             mask[labels == i] = 255
     ys, xs = np.nonzero(mask)
     if len(ys) < MIN_DIGIT_AREA or ys.max() - ys.min() + 1 < MIN_DIGIT_HEIGHT * size:
