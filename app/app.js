@@ -278,7 +278,9 @@ function renderPaper() {
   $("back").disabled = !state.step || state.shown === 0;
   $("next").disabled = !state.step || state.shown >= order.length;
   $("check").disabled = !result?.givens;
-  drawBoard(boardCanvas, { cells: paperCells(result, view() === "check") });
+  // With corners set by hand, draw the grid too, so the user sees where the app thinks it is.
+  const lines = state.pinned ? COLORS.app : null;
+  drawBoard(boardCanvas, { lines, cells: paperCells(result, view() === "check") });
   stage.showBoard(state.pinned && state.track === "lost" ? null : state.corners);
 }
 
@@ -370,15 +372,16 @@ async function finishPlacing() {
   await ready;
   if (state.placing === "paper") {
     setPaperResult(await call("read_at", [corners], grabFrame()));
-    if (state.source === "video") await pin(corners);
+    if (state.source === "video") await pin(corners, false);
     return show("paper");
   }
   await pin(corners);
   show("play");
 }
 
-async function pin(corners) {
-  const result = await call("pin", [corners], grabFrame());
+/** Start the surface tracker. around=false follows only the board (a printed puzzle). */
+async function pin(corners, around = true) {
+  const result = await call("pin", [corners, around], grabFrame());
   Object.assign(state, { pinned: true, corners: result.corners, track: result.track, onSheet: result.on_sheet });
 }
 
