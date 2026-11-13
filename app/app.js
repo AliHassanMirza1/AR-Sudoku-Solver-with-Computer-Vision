@@ -50,6 +50,7 @@ const state = {
   frozen: false,
   corners: null, // where the board is, in frame pixels
   pinned: false, // the surface tracker follows the board (virtual board, or paper corners set by hand)
+  autoPinned: false, // pinned because Python found a hand-drawn board; back to searching if lost
   track: null, // surface tracker state: tracking, occluded, plain, lost
   onSheet: false,
   // paper puzzle
@@ -101,7 +102,9 @@ function setStatus(key, pill = $("status")) {
 function goHome(message = "") {
   stopCamera();
   setSource("video");
-  Object.assign(state, { corners: null, pinned: false, track: null, result: null, puzzleKey: null, game: null });
+  Object.assign(state, {
+    corners: null, pinned: false, autoPinned: false, track: null, result: null, puzzleKey: null, game: null,
+  });
   call("reset");
   $("home-message").textContent = message;
   $("home-message").hidden = !message;
@@ -243,6 +246,7 @@ async function followBoard(frame) {
   if (token !== state.token) return;
   Object.assign(state, { corners: result.corners, track: result.track, onSheet: result.on_sheet });
   if (result.ink) state.game?.setInk(result.ink);
+  if (state.autoPinned && result.track === "lost") Object.assign(state, { pinned: false, autoPinned: false });
   render();
 }
 
@@ -257,7 +261,9 @@ async function snapToSheet(frame) {
 // ---------- paper puzzle ----------
 
 function startPaper() {
-  Object.assign(state, { result: null, puzzleKey: null, shown: 0, corners: null, pinned: false, track: null });
+  Object.assign(state, {
+    result: null, puzzleKey: null, shown: 0, corners: null, pinned: false, autoPinned: false, track: null,
+  });
   call("reset");
   show("paper");
 }
@@ -267,6 +273,7 @@ function setPaperResult(result) {
   if (key !== state.puzzleKey) Object.assign(state, { puzzleKey: key, shown: 0 });
   state.result = result;
   state.corners = result.corners;
+  if (result.pinned) Object.assign(state, { pinned: true, autoPinned: true, track: "tracking" });
   render();
 }
 
@@ -298,10 +305,28 @@ function renderPaper() {
   $("back").disabled = !state.step || state.shown === 0;
   $("next").disabled = !state.step || state.shown >= order.length;
   $("check").disabled = !result?.givens;
-  // With corners set by hand, draw the grid too, so the user sees where the app thinks it is.
-  const lines = state.pinned ? COLORS.app : null;
-  drawBoard(boardCanvas, { lines, cells: paperCells(result, view() === "check") });
+  drawBoard(boardCanvas, paperBoard(result, view() === "check"));
   stage.showBoard(state.pinned && state.track === "lost" ? null : state.corners);
+}
+
+/**
+ * The board drawn on the paper. A hand-drawn board (result.drawn) gets a clean board with
+ * straight lines over it, hiding its uneven lines, with its digits redrawn in black. With
+ * corners set by hand the grid is drawn too, so the user sees where the app thinks it is.
+ */
+function paperBoard(result, checking) {
+  const cells = paperCells(result, checking);
+  if (result?.drawn) {
+    if (!checking) cells.unshift(...givenCells(result.givens));
+    return { lines: COLORS.app, background: "rgba(255,255,255,0.92)", cells };
+  }
+  return { lines: state.pinned ? COLORS.app : null, cells };
+}
+
+function givenCells(givens) {
+  const cells = [];
+  givens.forEach((row, r) => row.forEach((d, c) => d && cells.push({ r, c, digit: d, color: COLORS.ink })));
+  return cells;
 }
 
 /** The app's digits in blue, the next one in orange, and the user's digits outlined green or red. */
@@ -452,7 +477,7 @@ async function finishPlacing() {
 /** Start the surface tracker. around=false follows only the board (a printed puzzle). */
 async function pin(corners, around = true) {
   const result = await call("pin", [corners, around], grabFrame());
-  Object.assign(state, { pinned: true, corners: result.corners, track: result.track, onSheet: result.on_sheet });
+  Object.assign(state, { pinned: true, autoPinned: false, corners: result.corners, track: result.track, onSheet: result.on_sheet });
 }
 
 // ---------- virtual board ----------

@@ -90,6 +90,15 @@ export function tiltedSurface(tilt, focal, [cx, cy]) {
   ];
 }
 
+/** Is the point inside the convex quadrilateral? */
+export function contains(quad, [x, y]) {
+  const signs = quad.map(([x1, y1], i) => {
+    const [x2, y2] = quad[(i + 1) % 4];
+    return Math.sign((x2 - x1) * (y - y1) - (y2 - y1) * (x - x1));
+  });
+  return signs.every((s) => s >= 0) || signs.every((s) => s <= 0);
+}
+
 /** The cell [row, col] at a point of the board (in the same coordinates as `corners`), or null. */
 export function cellAt(corners, point) {
   const [x, y] = apply(invert(squareToQuad(corners)), point);

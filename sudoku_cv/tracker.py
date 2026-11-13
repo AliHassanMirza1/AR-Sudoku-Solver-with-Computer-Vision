@@ -1,6 +1,7 @@
 import cv2
 import numpy as np
 
+from . import handdrawn
 from .detect import SQUARE, find_grid_contour, get_homography, threshold, to_bgr, warp_grid
 from .digits import find_rotation, read_digits
 from .solver import copy_grid, solve
@@ -68,12 +69,36 @@ def process_image(image, debug=False):
     thresh = threshold(gray)
     corners = find_grid_contour(thresh)
     if corners is None:
-        return make_result(None, debug=debug_images(image, thresh, None) if debug else None)
+        drawn = find_drawn(image)
+        return drawn or make_result(None, debug=debug_images(image, thresh, None) if debug else None)
 
     corners, flat, _ = upright_grid(gray, corners)
     debug = debug_images(image, thresh, corners) if debug else None
     givens, user_digits, confidence = read_digits(flat)
-    return make_result(corners, givens, user_digits, confidence, solve(givens, user_digits), debug)
+    solved = solve(givens, user_digits)
+    if solved["status"] != "solved":  # the grid may be uneven (hand-drawn), read with wrong cells
+        drawn = find_drawn(image)
+        if drawn is not None and drawn["status"] == "solved":
+            return drawn
+    return make_result(corners, givens, user_digits, confidence, solved, debug)
+
+
+# hand-drawn boards
+
+def find_drawn(image):
+    """Find, read and solve a hand-drawn board (see handdrawn.py), or None."""
+    found = handdrawn.find_board(to_bgr(image))
+    return None if found is None else read_drawn(image, *found)
+
+
+def read_drawn(image, corners, mesh):
+    """Read and solve a hand-drawn board at known corners, from an image of any size. The result
+    has drawn=True and the board's mesh (its line crossings, in board coordinates)."""
+    givens, confidence = handdrawn.read_board(to_bgr(image), corners, mesh)
+    empty = [[0] * 9 for _ in range(9)]
+    result = make_result(np.float32(corners), givens, empty, confidence, solve(givens, empty))
+    result.update(drawn=True, mesh=np.float32(mesh).tolist())
+    return result
 
 
 # live video

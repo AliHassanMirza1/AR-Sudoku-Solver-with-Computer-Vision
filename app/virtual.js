@@ -1,6 +1,6 @@
 // The virtual board: placing it on a surface, and the puzzle the user plays on it.
 
-import { COLORS, SIZE, apply, invert, squareToQuad, tint } from "./overlay.js";
+import { COLORS, SIZE, apply, contains, invert, squareToQuad, tint } from "./overlay.js";
 
 const GRAB_RADIUS = 36;
 const MIN_SIDE = 60; // smallest board side on screen, in pixels
@@ -94,7 +94,7 @@ export class Placement {
       const distances = corners.map(([x, y]) => Math.hypot(x - p[0], y - p[1]));
       const i = distances.indexOf(Math.min(...distances));
       if (distances[i] < GRAB_RADIUS) this.gesture = { kind: "corner", i, anchor: this.toSurface(corners[(i + 2) % 4]) };
-      else if (inside(corners, p)) this.gesture = { kind: "move", last: this.toSurface(p) };
+      else if (contains(corners, p)) this.gesture = { kind: "move", last: this.toSurface(p) };
     }
     if (this.gesture) this.touched = true;
     this.changed();
@@ -168,15 +168,6 @@ function convex(corners) {
     return Math.sign((x2 - x1) * (y3 - y2) - (y2 - y1) * (x3 - x2));
   });
   return turns.every((t) => t > 0) || turns.every((t) => t < 0);
-}
-
-/** Is the point inside the convex quadrilateral? */
-function inside(corners, [x, y]) {
-  const signs = corners.map(([x1, y1], i) => {
-    const [x2, y2] = corners[(i + 1) % 4];
-    return Math.sign((x2 - x1) * (y - y1) - (y2 - y1) * (x - x1));
-  });
-  return signs.every((s) => s >= 0) || signs.every((s) => s <= 0);
 }
 
 const emptyGrid = () => Array.from({ length: 9 }, () => Array(9).fill(0));
