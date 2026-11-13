@@ -4,17 +4,23 @@
 \usepackage{tabularx}
 \usepackage{booktabs}
 \usepackage{tikz}
+\usepackage{needspace}
+\usepackage{float}
+\usetikzlibrary{positioning, arrows.meta, calc}
 \setlist{nosep}
 \setlength{\parindent}{0pt}
+\sloppy
 \setlength{\parskip}{4pt}
 
 \definecolor{accent}{RGB}{37,99,235}
 \definecolor{good}{RGB}{22,163,74}
+\definecolor{bad}{RGB}{220,38,38}
 \definecolor{next}{RGB}{234,88,12}
 \definecolor{phone}{RGB}{24,24,27}
 \definecolor{video}{RGB}{63,63,70}
+\definecolor{table}{RGB}{120,85,60}
 
-\title{AR Sudoku: App and Website Design}
+\title{AR Sudoku: App and Website Design\\\large Rescoped version, November 12}
 \author{Muhammad Ali Hassan}
 \date{}
 
@@ -23,48 +29,104 @@
 
 \section{Goal}
 
-Point any phone or laptop camera at a printed Sudoku. The website finds the puzzle, solves it, and
-writes the missing digits on the paper. It also works on a puzzle you already started: it checks
-your handwritten digits and fills in the rest.
+One link that opens on any device (a Mac, an iPhone, an Android phone) with nothing to install. You
+point the camera at a Sudoku. The website finds the puzzle, solves it, and writes the missing
+digits on the paper. It also works on a puzzle you already started: it checks your handwritten
+digits and fills in the rest.
+
+\textbf{New:} if you have no Sudoku on paper, the app draws one in AR on any flat surface: a table,
+a wall, a whiteboard or a sheet of paper. You drag the 4 corners of the board to where you want
+it, and the board stays there when the phone moves. You play by tapping cells, or by writing with a
+pen when the board is on paper.
+
+Two rules for the whole project:
 \begin{itemize}
-  \item \textbf{Leonardo:} vision and solver (\texttt{sudoku\_cv}).
-  \item \textbf{Me:} the website. Camera, screens, drawing the digits on the paper, free hosting.
+  \item \textbf{Free hosting.} A static site on GitHub Pages:\\
+        \texttt{alihassanmirza1.github.io/AR-Sudoku-Solver-with-Computer-Vision}
+  \item \textbf{All computing on the device that opens the page.} No server. The video never leaves
+        the device, and the site works offline after the first visit.
+\end{itemize}
+\begin{itemize}
+  \item \textbf{Leonardo:} vision and solver (\texttt{sudoku\_cv/}).
+  \item \textbf{Me:} the website. Camera, screens, drawing digits on the paper, the virtual board,
+        hosting.
 \end{itemize}
 Classical computer vision only, no neural networks.
 
+\subsection*{What changed from the first version}
+
+\begin{tabularx}{\textwidth}{@{}l>{\raggedright\arraybackslash}X@{}}
+\toprule
+Topic & Change \\
+\midrule
+Hosting & GitHub Pages was the plan; now it is a requirement. One URL for Mac, iPhone and Android. \\
+Computing & Must stay on the device. The ``Hugging Face server'' fallback is removed; every
+  fallback now runs on the device. \\
+New mode & Virtual board placed with draggable corners on any flat surface
+  (section~\ref{sec:modes}). \\
+Plan & Re-timed from today. Leonardo's real code is already pushed, so I skip the stub and build
+  on his real code. \\
+\bottomrule
+\end{tabularx}
+
+\section{Two modes}\label{sec:modes}
+
+\textbf{A. Paper puzzle} (same as before). Point at a printed Sudoku. Live shows all missing
+digits one after another; Step shows one per tap, as a hint. Check freezes the picture so the user
+can fix a misread digit. Continue colours the user's handwritten digits green (right) or red
+(wrong). \textbf{New:} if the app cannot find the grid, or finds it wrong, the user can set its 4
+corners by hand with the same handles as in mode B.
+
+\textbf{B. Virtual board} (new).
+\begin{enumerate}
+  \item Tap \emph{Draw a board} and pick a puzzle: a new one (easy, medium or hard), or type one in
+        by tapping cells (for example, a newspaper puzzle you don't want to write on).
+  \item \textbf{Place it.} Point the camera at any flat surface. An empty board appears with a
+        round handle on each corner. Drag each corner to where you want it: on a table, a wall, a
+        whiteboard or a sheet of paper. Drag the middle to move the whole board. The 4 corners can
+        form any 4-sided shape, so the user makes the board look square on the surface as seen
+        from the camera, and the homography does the rest. If the app sees a sheet of paper, the
+        corners first snap to the sheet. Tap \emph{Done}.
+  \item \textbf{It stays there.} The app keeps the board on the surface while the phone moves
+        (see below).
+  \item \textbf{Play.} Tap a cell on the screen and pick a digit. This works on any surface. On
+        paper or a whiteboard the user can also write with a pen or marker; when the board is in
+        view and still, the app reads the new digits. Digits are coloured green or red, as in
+        Continue mode. \emph{Hint} shows one digit in orange, \emph{Solve} shows all of them.
+  \item If the board slips or is lost, tap \emph{Adjust} and drag the corners again.
+  \item Optional \emph{Trace} (on paper): the user draws over the board lines with a pen and a
+        ruler. The paper now has a real board, and mode A takes over.
+\end{enumerate}
+
+\textbf{How the board stays on the surface.} When the user taps Done, the app keeps that frame
+as the \emph{reference} and the 4 corners in it. Then, all with classical CV:
+\begin{itemize}
+  \item \textbf{Every frame:} Lucas--Kanade optical flow follows about 100 strong points of the
+        surface (corners found with \texttt{goodFeaturesToTrack}) inside and around the board. A
+        RANSAC homography from these points moves the 4 board corners. Points hidden by a hand
+        are thrown out by RANSAC.
+  \item \textbf{Every few frames, or when many points are lost:} ORB features of the new frame
+        are matched to the reference frame, and a RANSAC homography from the reference gives the
+        corners again. This removes the slow drift of optical flow and finds the board again after
+        it left the view.
+  \item \textbf{On a sheet of paper:} if the corners snapped to a sheet, the sheet's 4 corners are
+        found again in every frame with the contour method from Leonardo's \texttt{detect.py}. This
+        works even though a blank sheet has no texture inside.
+  \item \textbf{Plain surface} (a white wall): there are too few points to follow. The board stays
+        at the same place on the screen and the message says to hold the phone still; it works
+        well with the phone on a stand. Points around the board count too, so a poster or a
+        picture frame next to the board is enough.
+\end{itemize}
+Phone AR frameworks (WebXR plane detection) do not run in iPhone Safari, so I do not use them. The
+methods above are all in the course (features, optical flow, RANSAC, homography) and run in
+Pyodide's OpenCV.
+
 \section{Screens}
 
-\begin{figure}[h]
+\begin{figure}[H]
 \centering
-% ---------- Home screen ----------
-\begin{tikzpicture}[font=\sffamily]
-  \fill[phone, rounded corners=14pt] (0,0) rectangle (5.4,10.8);
-  % grid icon
-  \begin{scope}[shift={(1.9,7.6)}]
-    \draw[white, line width=1.2pt, rounded corners=3pt] (0,0) rectangle (1.6,1.6);
-    \foreach \i in {1,2} {
-      \draw[white!60] (\i*0.5333,0) -- (\i*0.5333,1.6);
-      \draw[white!60] (0,\i*0.5333) -- (1.6,\i*0.5333);
-    }
-    \node[white, font=\sffamily\bfseries] at (0.2667,1.3333) {5};
-    \node[accent, font=\sffamily\bfseries] at (1.3333,1.3333) {8};
-    \node[white, font=\sffamily\bfseries] at (0.8,0.8) {7};
-    \node[accent, font=\sffamily\bfseries] at (0.2667,0.2667) {4};
-    \node[white, font=\sffamily\bfseries] at (1.3333,0.2667) {3};
-  \end{scope}
-  \node[white, font=\sffamily\bfseries\Large] at (2.7,6.8) {AR Sudoku};
-  \node[white!65, font=\sffamily\small] at (2.7,6.25) {Point your camera at a Sudoku.};
-  % buttons
-  \fill[accent, rounded corners=8pt] (0.6,4.5) rectangle (4.8,5.3);
-  \node[white, font=\sffamily\bfseries] at (2.7,4.9) {Start camera};
-  \draw[white!60, rounded corners=8pt] (0.6,3.5) rectangle (4.8,4.2);
-  \node[white, font=\sffamily\small] at (2.7,3.85) {Try a sample};
-  \draw[white!60, rounded corners=8pt] (0.6,2.6) rectangle (4.8,3.3);
-  \node[white, font=\sffamily\small] at (2.7,2.95) {Upload a photo};
-  \node[white!55, font=\sffamily\scriptsize] at (2.7,1.0) {Runs on your device, works offline};
-\end{tikzpicture}
-\hspace{1.2cm}
 % ---------- Camera screen ----------
+\scalebox{0.8}{%
 \begin{tikzpicture}[font=\sffamily]
   \fill[phone, rounded corners=14pt] (0,0) rectangle (5.4,10.8);
   \fill[video] (0.15,2.45) rectangle (5.25,10.2);
@@ -121,21 +183,114 @@ Classical computer vision only, no neural networks.
   \node[white, font=\sffamily\bfseries\scriptsize] at (2.7,0.725) {Next};
   \draw[white!60, rounded corners=7pt] (3.6,0.45) rectangle (5.0,1.0);
   \node[white, font=\sffamily\scriptsize] at (4.3,0.725) {Check};
-\end{tikzpicture}
+\end{tikzpicture}}
+\hspace{0.3cm}
+% ---------- Placing the virtual board ----------
+\scalebox{0.8}{%
+\begin{tikzpicture}[font=\sffamily]
+  \fill[phone, rounded corners=14pt] (0,0) rectangle (5.4,10.8);
+  \fill[table] (0.15,2.45) rectangle (5.25,10.2);
+  % wood grain = texture the tracker follows
+  \foreach \y in {3.0,3.9,4.6,5.5,6.3,7.2,8.0,8.9} {
+    \draw[table!80!white, line width=0.6pt] (0.15,\y) .. controls (1.8,\y+0.25) and (3.4,\y-0.25) .. (5.25,\y+0.1);
+  }
+  % status pill
+  \fill[accent, rounded corners=7pt] (0.4,9.55) rectangle (4.3,10.0);
+  \node[white, font=\sffamily\bfseries\scriptsize] at (2.35,9.775) {Drag the corners. Tap Done.};
+  % the board being placed, seen in perspective on the table
+  \coordinate (BL) at (0.55,3.55); \coordinate (BR) at (4.85,3.35);
+  \coordinate (TR) at (4.15,7.75); \coordinate (TL) at (1.25,7.85);
+  \fill[white, opacity=0.18] (BL) -- (BR) -- (TR) -- (TL) -- cycle;
+  \foreach \t in {0.1111,0.2222,0.4444,0.5556,0.7778,0.8889} {
+    \draw[white!80] ($(BL)!\t!(BR)$) -- ($(TL)!\t!(TR)$);
+    \draw[white!80] ($(BL)!\t!(TL)$) -- ($(BR)!\t!(TR)$);
+  }
+  \foreach \t in {0.3333,0.6667} {
+    \draw[white, line width=0.9pt] ($(BL)!\t!(BR)$) -- ($(TL)!\t!(TR)$);
+    \draw[white, line width=0.9pt] ($(BL)!\t!(TL)$) -- ($(BR)!\t!(TR)$);
+  }
+  \draw[white, line width=1.2pt] (BL) -- (BR) -- (TR) -- (TL) -- cycle;
+  % tracked surface points
+  \foreach \p in {(0.5,2.9),(2.2,3.05),(4.9,2.8),(0.35,5.6),(5.0,5.1),(0.6,8.6),(2.9,8.4),(4.8,8.9),(2.4,5.4),(3.6,6.6)} {
+    \draw[good!70!white, line width=0.7pt] \p circle (0.07);
+  }
+  % corner handles, one being dragged
+  \foreach \c in {BL,BR,TL} { \filldraw[fill=white, draw=accent, line width=1.4pt] (\c) circle (0.2); }
+  \filldraw[fill=accent, draw=white, line width=1.4pt] (TR) circle (0.26);
+  \draw[white, -{Stealth}, line width=0.8pt] ($(TR)+(0.55,0.45)$) -- ($(TR)+(0.3,0.25)$);
+  % controls
+  \node[white!65, font=\sffamily\tiny] at (2.7,2.0) {Table, wall, whiteboard or a sheet of paper};
+  \draw[white!60, rounded corners=7pt] (0.4,0.45) rectangle (2.4,1.0);
+  \node[white, font=\sffamily\scriptsize] at (1.4,0.725) {Reset};
+  \fill[accent, rounded corners=7pt] (3.0,0.45) rectangle (5.0,1.0);
+  \node[white, font=\sffamily\bfseries\scriptsize] at (4.0,0.725) {Done};
+\end{tikzpicture}}
+\hspace{0.3cm}
+% ---------- Virtual board screen ----------
+\scalebox{0.8}{%
+\begin{tikzpicture}[font=\sffamily]
+  \fill[phone, rounded corners=14pt] (0,0) rectangle (5.4,10.8);
+  \fill[table] (0.15,2.45) rectangle (5.25,10.2);
+  % status pill
+  \fill[accent, rounded corners=7pt] (0.4,9.55) rectangle (5.0,10.0);
+  \node[white, font=\sffamily\bfseries\scriptsize] at (2.7,9.775) {Tap a cell, or write on the paper.};
+  % blank sheet with the virtual board, slightly turned
+  \begin{scope}[shift={(0.75,3.6)}, rotate=5, xslant=-0.05]
+    \fill[white!96!black] (-0.3,-0.75) rectangle (4.17,5.0);
+    \def\s{0.43}
+    % hint cell (row 2, column 0)
+    \fill[next!25] (0,6*\s) rectangle (1*\s,7*\s);
+    \draw[next, line width=1pt] (0,6*\s) rectangle (1*\s,7*\s);
+    \node[next, font=\sffamily\bfseries\footnotesize] at (0.5*\s, 6.5*\s) {1};
+    % board lines drawn by the app
+    \foreach \i in {1,2,4,5,7,8} {
+      \draw[accent!45] (\i*\s,0) -- (\i*\s,9*\s);
+      \draw[accent!45] (0,\i*\s) -- (9*\s,\i*\s);
+    }
+    \foreach \i in {0,3,6,9} {
+      \draw[accent, line width=0.9pt] (\i*\s,0) -- (\i*\s,9*\s);
+      \draw[accent, line width=0.9pt] (0,\i*\s) -- (9*\s,\i*\s);
+    }
+    % puzzle digits drawn by the app
+    \foreach \row [count=\r from 0] in {
+      {5,3,0,0,7,0,0,0,0},{6,0,0,1,9,5,0,0,0},{0,9,8,0,0,0,0,6,0},
+      {8,0,0,0,6,0,0,0,3},{4,0,0,8,0,3,0,0,1},{7,0,0,0,2,0,0,0,6},
+      {0,6,0,0,0,0,2,8,0},{0,0,0,4,1,9,0,0,5},{0,0,0,0,8,0,0,7,9}} {
+      \foreach \d [count=\c from 0] in \row {
+        \ifnum\d>0
+          \node[black!85, font=\sffamily\bfseries\footnotesize] at (\c*\s+0.5*\s, 8.5*\s-\r*\s) {\d};
+        \fi
+      }
+    }
+    % digits the user wrote with a pen: green right, red wrong
+    \node[good, font=\itshape\footnotesize] at (2.5*\s, 8.5*\s) {4};
+    \node[good, font=\itshape\footnotesize] at (3.5*\s, 8.5*\s) {6};
+    \node[bad, font=\itshape\footnotesize] at (5.5*\s, 8.5*\s) {9};
+    \draw[bad, line width=0.8pt] (5*\s,8*\s) rectangle (6*\s,9*\s);
+    \node[good, font=\itshape\footnotesize] at (1.5*\s, 7.5*\s) {7};
+  \end{scope}
+  % controls
+  \node[white!65, font=\sffamily\tiny] at (2.7,2.0) {Medium \textbullet{} 4 written, 1 wrong};
+  \draw[white!60, rounded corners=7pt] (0.4,0.45) rectangle (1.8,1.0);
+  \node[white, font=\sffamily\scriptsize] at (1.1,0.725) {New};
+  \fill[accent, rounded corners=7pt] (2.0,0.45) rectangle (3.4,1.0);
+  \node[white, font=\sffamily\bfseries\scriptsize] at (2.7,0.725) {Hint};
+  \draw[white!60, rounded corners=7pt] (3.6,0.45) rectangle (5.0,1.0);
+  \node[white, font=\sffamily\scriptsize] at (4.3,0.725) {Solve};
+\end{tikzpicture}}
 
 \vspace{4pt}
-\small Home screen \hspace{3.6cm} Camera screen in Step mode
+\small Paper puzzle, Step mode \hspace{1.5cm} Placing a virtual board \hspace{1.7cm} Virtual board, playing\\
+\scriptsize Green circles: surface points the tracker follows.
 \end{figure}
 
 \begin{itemize}
-  \item \textbf{Home:} start the camera, try a sample puzzle, or upload a photo.
-  \item \textbf{Camera:} a message on top tells the user what to do. Digits appear on the paper and
-        stay on it when the paper moves. Printed digits are black, the app's digits are blue, the
-        next one is orange.
-  \item \textbf{Live or Step:} Live shows all missing digits one after another. Step shows one per
-        tap, so it works as a hint.
-  \item \textbf{Check:} if a digit was read wrong, the user freezes the picture and taps to fix it.
-  \item \textbf{Continue mode:} the user's handwritten digits get green when right, red when wrong.
+  \item \textbf{Home:} start the camera, draw a virtual board, try a sample puzzle, or upload a
+        photo.
+  \item \textbf{Colours:} printed digits black, the app's digits blue, the next one orange, the
+        user's digits green when right and red when wrong. On the virtual board the lines are blue
+        (or white while placing) so it is clear they are not really on the surface.
+  \item \textbf{Install:} ``Add to Home Screen'' opens the site full screen, like an app.
 \end{itemize}
 
 \begin{tabularx}{\textwidth}{@{}lX@{}}
@@ -146,36 +301,153 @@ no puzzle found & Point the camera at a Sudoku \\
 puzzle found, reading & Hold still\dots \\
 can't be solved & Some digits look wrong. Tap Check. \\
 solved & Solved. Watch the paper. \\
+\midrule
+placing the board (virtual) & Drag the corners. Tap Done. \\
+sheet of paper seen while placing & Corners snapped to the sheet. Tap Done. \\
+board placed & Tap a cell, or write on the paper \\
+board partly hidden (hand) & Board kept; checking when your hand moves away \\
+too few surface points & Plain surface: hold the phone still \\
+board lost & Point back at the board, or tap Adjust \\
 \bottomrule
 \end{tabularx}
 
 \section{How it works}
 
+\begin{figure}[h]
+\centering
+\begin{tikzpicture}[font=\sffamily\small, box/.style={draw, rounded corners=4pt, align=center,
+    inner sep=6pt, minimum height=1.3cm}, >={Stealth}]
+  \node[box] (cam) {Camera\\\scriptsize\texttt{getUserMedia}};
+  \node[box, right=0.8cm of cam, text width=3.8cm] (main) {Page (main thread)\\\scriptsize video
+    + overlay at camera speed,\\ last homography reused};
+  \node[box, right=2.3cm of main, text width=4.0cm, fill=accent!8] (work) {Background thread
+    (Web Worker)\\\scriptsize Pyodide: Python, numpy, OpenCV\\ \texttt{sudoku\_cv} + \texttt{app/py}};
+  \draw[->] (cam) -- (main);
+  \draw[->] ([yshift=5pt]main.east) -- node[above, font=\scriptsize] {640 px frame} ([yshift=5pt]work.west);
+  \draw[->] ([yshift=-5pt]work.west) -- node[below, font=\scriptsize] {result dict} ([yshift=-5pt]main.east);
+\end{tikzpicture}
+\end{figure}
+
 \begin{enumerate}
-  \item The camera gives a stream of video frames.
-  \item Whenever it is free, the site takes the newest frame, shrinks it to 640\,px, and gives it to
-        Leonardo's code. His Python runs inside the browser with Pyodide, in a background thread, so
-        the video never freezes.
-  \item His code returns the puzzle's 4 corners, the digits, the solution and the order to show them.
-  \item The site writes the digits on a flat square and bends it onto the paper with the homography
-        (a CSS \texttt{matrix3d} transform).
+  \item The camera gives video frames. The page always shows the live video.
+  \item When the background thread is free, the page takes the newest frame, shrinks it to
+        640\,px and sends it (RGBA pixels, no copy). Only one frame is in flight; the others are
+        skipped, so the video never freezes.
+  \item In the background thread, Leonardo's Python runs inside the browser with Pyodide
+        (\mbox{WebAssembly}). It returns the result dict: status, 4 corners, homography, digits,
+        solution, reveal order, wrong digits.
+  \item The page writes the digits on a flat $450\times450$ square and bends it onto the paper with
+        the homography (a CSS \texttt{matrix3d} transform). Between results it keeps the last
+        homography, so drawing stays smooth even if Python is slower than the camera.
+  \item \textbf{Virtual board:} while placing, the handles are plain page elements and need no
+        Python. After Done, the worker runs the surface tracker (section~\ref{sec:modes}) instead of
+        the Sudoku tracker and returns the board's 4 corners and homography, so drawing is the same
+        as in step 4. A tap on the screen goes through the inverse homography to find the cell. To
+        read pen digits, the same homography flattens the board back to $450\times450$, so
+        Leonardo's cell reader works unchanged.
 \end{enumerate}
-There is no server: nothing to pay for, the video never leaves the phone, and the site works offline
-after the first visit. It is hosted for free on GitHub Pages. My code lives in \texttt{app/}.
 
-If this is too slow on phones: use smaller frames (480\,px), or track the corners with OpenCV.js, or
-as a last resort run the Python on a free Hugging Face server.
-
-\section{What I need from Leonardo}
+\subsection*{Hosting and deploy}
 
 \begin{itemize}
-  \item A \texttt{solve(givens)} function, to solve again after the user fixes a digit.
-  \item For Continue mode: handwritten digits kept apart from printed ones, plus a list of wrong
-        ones. Handwriting can be read classically with HOG features and k-nearest neighbours on
-        MNIST digits.
-  \item A confidence score per cell, so the Check screen can shade doubtful cells.
-  \item Optional: the in-between images (threshold, contour, flat grid) for a ``How it works'' demo.
+  \item GitHub Pages gives HTTPS, which browsers require before they allow the camera.
+  \item A GitHub Action runs on every push to \texttt{main}: it zips \texttt{sudoku\_cv/} (code and
+        \texttt{.npz} data) next to \texttt{app/} and publishes the site. Leonardo's changes go
+        live without either of us copying files.
+  \item The Pyodide files (Python, numpy, OpenCV) are served from our own site with a fixed version,
+        not from a CDN, so a service worker can cache everything for offline use. It is a few tens
+        of MB, within GitHub Pages limits (100\,MB per file, 1\,GB per site). I measure the
+        exact size in week 1.
+  \item Free GitHub Pages needs a public repository (or GitHub Education for a private one).
 \end{itemize}
+
+\subsection*{Devices}
+
+\begin{tabularx}{\textwidth}{@{}lX@{}}
+\toprule
+Device & Notes \\
+\midrule
+Mac (Safari, Chrome) & The built-in camera faces the user: hold the paper up to it, or use an
+  iPhone as a webcam (Continuity Camera). The virtual board can go on anything the camera sees,
+  such as the wall behind. Photo upload always works. \\
+iPhone (Safari) & Back camera via \texttt{facingMode: "environment"}, \texttt{playsinline} video,
+  camera starts only after a tap. Memory is the main risk for Pyodide: tested first. \\
+Android (Chrome) & No special cases expected. \\
+\bottomrule
+\end{tabularx}
+
+\section{Speed: what I measured on Leonardo's code}\label{sec:speed}
+
+I ran his pushed code natively on my Mac (Python, OpenCV) on a synthetic $640\times480$ frame of a
+tilted printed puzzle:
+\begin{itemize}
+  \item \texttt{process\_image} (single photo, read + solve): \textbf{112\,ms}, all 30 printed
+        digits read correctly, solved.
+  \item \texttt{SudokuTracker.process\_frame} (live, per frame): \textbf{about 70--90\,ms}. About
+        97\% of that is \texttt{refine\_corners}, which runs on every frame and calls
+        \texttt{warpPerspective} about 440 times per frame.
+\end{itemize}
+Python in the browser is usually several times slower than native, so as it is now the live mode
+would show only a few updates per second on a phone. The plan, all on the device:
+\begin{enumerate}
+  \item Skip \texttt{refine\_corners} when the new corners are close to the last ones, or refine
+        only on the frames where digits are read (asked of Leonardo, section~\ref{sec:leo}). Without it the
+        per-frame path should drop to a few ms natively.
+  \item The overlay already runs at camera speed with the last homography (step 4 above), so a
+        slower Python only makes the overlay lag, never freeze.
+  \item If still too slow: 480\,px frames, and follow the 4 corners between Sudoku tracker results
+        with the same optical flow as the virtual board.
+\end{enumerate}
+\textbf{Surface tracking for the virtual board} (same Mac, $640\times480$ textured test frame):
+ORB with 500 features + matching + RANSAC homography takes \textbf{7\,ms}; optical flow on 100
+points + RANSAC takes \textbf{under 1\,ms}. Even several times slower in the browser, this fits in
+every frame on a phone.
+
+\section{What I need from Leonardo}\label{sec:leo}
+
+His push already gives most of what the first version asked for: \texttt{process\_image},
+\texttt{SudokuTracker} (\texttt{process\_frame}, \texttt{set\_givens}, \texttt{reset}),
+\texttt{solve(givens, user\_digits)}, a confidence per cell, the \texttt{wrong} list,
+handwriting read with HOG and $k$-nearest neighbours, and the debug images. New requests:
+\begin{enumerate}
+  \item \textbf{Speed:} the \texttt{refine\_corners} change above.
+  \item \textbf{Corners set by hand (mode A):} \texttt{tracker.set\_corners(corners)} and a
+        \texttt{corners} argument for \texttt{process\_image}: skip grid detection, read the
+        digits inside the 4 corners the user placed.
+  \item \textbf{Reading a virtual board:} \texttt{read\_handwritten(frame, homography)}: flatten
+        the board, and read every cell that has ink as handwriting (there are no printed digits on
+        the paper, they are only on screen). Returns \texttt{user\_digits} and
+        \texttt{confidence}. I call it only when the board has been still for a few frames.
+  \item \textbf{Keep OpenCV 4.x:} Pyodide ships OpenCV 4, and \texttt{requirements.txt} already
+        says \texttt{opencv-python<5}. I will check in week 1 that everything his code calls
+        (including \texttt{cv2.imencode} for the debug images) exists in Pyodide's build.
+\end{enumerate}
+If he is short on time, I can write items 2 and 3 in \texttt{app/py/} on top of his
+\texttt{detect.py} and \texttt{digits.py} functions, and he reviews them.
+
+\textbf{What I write myself:}
+\begin{itemize}
+  \item \textbf{Surface tracker} in \texttt{app/py/track.py}: snapping to a sheet of paper (on top
+        of his \texttt{threshold} and \texttt{order\_corners}), optical flow, ORB matching, RANSAC
+        homography, and the ``lost / plain surface'' states. It belongs to the virtual board, so it
+        is mine; it also gives me a vision part of my own for the report.
+  \item \textbf{Puzzle generator} in \texttt{app/py/generate.py}, using his solver. Fill an empty grid with random backtracking, then remove digits one at a time
+while the puzzle still has exactly one solution. Difficulty is the number of givens (easy 40,
+medium 32, hard 26). Typed-in puzzles go through \texttt{solve} to check that they have a
+        solution.
+\end{itemize}
+
+\section{Repository}
+
+\begin{verbatim}
+app/            my code: index.html, app.js, worker.js, overlay.js,
+                virtual.js, sw.js (offline), manifest.json (install)
+app/py/         bridge.py (calls sudoku_cv from the worker),
+                track.py (surface tracker), generate.py
+sudoku_cv/      Leonardo's package (I do not edit it)
+samples/        test photos and videos (not committed)
+.github/workflows/pages.yml   build and publish to GitHub Pages
+\end{verbatim}
 
 \section{Steps to finish}
 
@@ -183,36 +455,58 @@ as a last resort run the Python on a free Hugging Face server.
 \toprule
 & Dates & What I do \\
 \midrule
-1 & by Nov 2 & Run Pyodide + OpenCV on a laptop, an iPhone and an Android phone and time it. Put a
-  test page on GitHub Pages. Decide if the in-browser plan is fast enough. \\
-2 & Nov 3 -- 9 & Camera on all devices. Send frames to the background thread. Draw the digits from
-  Leonardo's stub onto the sample photos. \\
-3 & Nov 10 -- 15 & All screens: home, messages, Live and Step, Check, Continue colours, photo
-  upload, offline install. \\
-4 & Nov 16 -- 22 & Swap the stub for Leonardo's real code. Test on the sample photos. \\
-5 & Nov 23 -- 30 & Test on the 3 devices, let 5 classmates try it, fix problems. Code freeze Nov 30. \\
+1 & Nov 12 -- 15 & Site and GitHub Action live on Pages. Worker loads Pyodide + OpenCV and runs
+  Leonardo's real \texttt{process\_image} on a sample photo. Time it on the Mac, an iPhone and an
+  Android phone. \textbf{Nov 15:} decide which speed fixes from section~\ref{sec:speed} we need. \\
+2 & Nov 16 -- 20 & Camera on all devices, frame loop, overlay with \texttt{matrix3d}, messages,
+  Live and Step. \\
+3 & Nov 21 -- 25 & Virtual board: corner handles, snapping to a sheet, surface tracker (optical
+  flow, ORB, RANSAC), tap input, generator, typed-in puzzles, reading pen digits, Hint and Solve. \\
+4 & Nov 26 -- 29 & Check screen, Continue colours, photo upload, offline + install. Test on the
+  3 devices, 5 classmates try it. (Nov 26 is Thanksgiving.) \\
+5 & Nov 30 & Code freeze. \\
 6 & Dec 1 -- 11 & Demo on Dec 1 or 3 with a backup video. Report due Dec 11. \\
 \bottomrule
 \end{tabularx}
 
+\textbf{If we run late, cut in this order:} Trace, the ``How it works'' debug view, typed-in
+puzzles, reading pen digits on the virtual board (tapping stays). Not cut: the paper puzzle mode,
+and the virtual board with corner handles, tracking, generated puzzles and tap input.
+
+\needspace{8\baselineskip}
 \section{Testing}
 
-On a laptop, an iPhone and an Android phone:
+On a Mac, an iPhone and an Android phone:
 \begin{itemize}
-  \item \textbf{Speed:} digit updates per second (target: 15 on a laptop, 10 on phones).
-  \item \textbf{Load time:} under 10\,s the first time, under 2\,s after.
+  \item \textbf{Speed:} overlay updates per second (target: 15 on a laptop, 10 on phones) and Python
+        results per second.
+  \item \textbf{Load time:} first visit on Wi-Fi (target under 15\,s, Pyodide is large), under 2\,s
+        after. Works with no network after the first visit.
   \item \textbf{Time to solve:} from ``Start camera'' to solved, on 10 printed puzzles.
-  \item \textbf{Steadiness:} how much the digits shake while the paper is still.
+  \item \textbf{Steadiness:} how much the digits shake while the paper is still, in both modes.
   \item \textbf{Continue mode:} on 10 half-filled puzzles, how many wrong digits are caught.
-  \item \textbf{Ease of use:} 5 classmates try it with no help.
+  \item \textbf{Virtual board:} placed on 5 surfaces (wood table, plain wall, wall with a poster,
+        whiteboard, sheet of paper). For each: time to place it, how far the board drifts (in
+        pixels) after 30\,s of moving the phone, and whether it is found again after leaving the
+        view. Pen digits read right on 3 paper boards filled by 3 different people; board kept
+        while a hand covers one corner.
+  \item \textbf{Ease of use:} 5 classmates try both modes with no help.
 \end{itemize}
 
 \section{Risks}
 
 \begin{itemize}
-  \item \textbf{Too slow on phones:} the fallbacks in section 3.
-  \item \textbf{Handwriting read wrong:} the user fixes it on the Check screen.
-  \item \textbf{iPhone camera issues:} test on a real iPhone in week 1; photo upload always works.
+  \item \textbf{Too slow on phones:} the fixes in section~\ref{sec:speed}, all on the device. No server.
+  \item \textbf{iPhone memory or camera issues:} tested in week 1; photo upload always works.
+  \item \textbf{Mac camera faces the user:} hold the paper up, use the iPhone as a webcam, or upload
+        a photo.
+  \item \textbf{Plain wall or table, nothing to follow:} the board stays fixed on the screen and the
+        user holds the phone still or uses a stand; a sheet of paper or a poster nearby fixes it.
+  \item \textbf{Board drifts or is lost after fast motion:} ORB against the reference frame finds
+        it again; if not, Adjust.
+  \item \textbf{Hand covers the board while writing:} RANSAC ignores the hidden points; pen digits
+        are read only when the board is back in full view and still.
+  \item \textbf{Handwriting read wrong:} the user taps the cell to fix it.
   \item \textbf{Demo fails in class:} recorded backup video.
 \end{itemize}
 
