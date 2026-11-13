@@ -11,6 +11,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path[:0] = [ROOT, os.path.join(ROOT, "app", "py"), os.path.dirname(__file__)]
 
 import bridge  # noqa: E402
+import track  # noqa: E402
 from generate import GIVENS, count_solutions, generate  # noqa: E402
 from sudoku_cv.solver import is_valid  # noqa: E402
 from synthetic import PUZZLE, TILTED, printed_scene, scene, SIZE, CELL  # noqa: E402
@@ -25,6 +26,11 @@ def rgba(bgr):
 
 def gray(bgr):
     return cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+
+
+def noisy(gray_frame, rng, sigma=4):
+    """Camera sensor noise."""
+    return (gray_frame + rng.normal(0, sigma, gray_frame.shape)).clip(0, 255).astype(np.uint8)
 
 
 def camera_move(bgr, dx, dy, angle):
@@ -62,11 +68,57 @@ class TrackTest(unittest.TestCase):
         self.assertEqual(tracker.state, "tracking")
         self.assertLess(np.abs(tracker.corners - expected).max(), 3)
 
-    def test_finds_the_board_again_after_losing_it(self):
+    def test_board_is_steady_when_the_camera_is_still(self):
+        frame = gray(scene(None))
+        tracker = SurfaceTracker(frame, self.board)
+        rng = np.random.default_rng(0)
+        worst = 0
+        for _ in range(40):
+            tracker.update(noisy(frame, rng))
+            worst = max(worst, np.abs(tracker.corners - self.board).max())
+        self.assertLess(worst, 0.5)
+
+    def test_no_drift_after_moving_around(self):
         frame = scene(None)
         tracker = SurfaceTracker(gray(frame), self.board)
-        tracker.update(np.full_like(gray(frame), 128))
+        rng = np.random.default_rng(0)
+        for step in range(1, 61):
+            t = step / 60 * 2 * np.pi  # a loop that ends where it started
+            moved, _ = camera_move(frame, 30 * np.sin(t), 15 * np.sin(2 * t), 4 * np.sin(t))
+            tracker.update(noisy(gray(moved), rng))
+            self.assertNotEqual(tracker.state, "lost", step)
+        self.assertLess(np.abs(tracker.corners - self.board).max(), 1)
+
+    def test_keeps_a_printed_puzzle_partly_out_of_view(self):
+        frame = printed_scene()
+        tracker = SurfaceTracker(gray(frame), TILTED, around=False)
+        for step in range(1, 31):
+            moved, move = camera_move(frame, 5 * step, 2 * step, 0.3 * step)
+            tracker.update(gray(moved))
+            self.assertNotEqual(tracker.state, "lost", step)
+            self.assertLess(np.abs(tracker.corners - transform(TILTED, move)).max(), 3, step)
+
+    def test_a_hand_over_the_board_does_not_move_it(self):
+        frame = scene(None)
+        tracker = SurfaceTracker(gray(frame), self.board)
+        for step in range(1, 21):
+            moved, move = camera_move(frame, step, step / 2, 0.2 * step)
+            cv2.ellipse(moved, (150 + 8 * step, 300), (90, 140), 20, 0, 360, (90, 120, 170), -1)
+            tracker.update(gray(moved))
+        self.assertNotEqual(tracker.state, "lost")
+        self.assertLess(np.abs(tracker.corners - transform(self.board, move)).max(), 3)
+
+    def test_a_few_bad_frames_do_not_lose_the_board(self):
+        frame = scene(None)
+        tracker = SurfaceTracker(gray(frame), self.board)
+        blank = np.full_like(gray(frame), 128)
+        for _ in range(track.LOST_FRAMES - 1):
+            tracker.update(blank)
+        self.assertNotEqual(tracker.state, "lost")
+        np.testing.assert_allclose(tracker.corners, self.board)
+        tracker.update(blank)
         self.assertEqual(tracker.state, "lost")
+
         moved, move = camera_move(frame, 30, 10, 5)
         tracker.update(gray(moved))
         self.assertEqual(tracker.state, "tracking")

@@ -70,10 +70,11 @@ def snap(frame):
     return {"corners": None if sheet is None else board_on_sheet(sheet).tolist()}
 
 
-def pin(frame, corners):
-    """Keep the board at these corners on the surface from now on."""
+def pin(frame, corners, around=True):
+    """Keep the board at these corners on the surface from now on. around=False for a printed
+    puzzle: follow only the paper, not what is around it."""
     global surface
-    surface = SurfaceTracker(gray_of(frame), corners)
+    surface = SurfaceTracker(gray_of(frame), corners, around)
     return board_state()
 
 
