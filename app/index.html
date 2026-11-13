@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#18181b">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="description" content="Point your camera at a Sudoku and watch it solve itself on the paper.">
+  <title>AR Sudoku</title>
+  <link rel="manifest" href="manifest.json">
+  <link rel="icon" href="icon.png">
+  <link rel="apple-touch-icon" href="icon.png">
+  <link rel="stylesheet" href="style.css">
+  <script type="module" src="app.js"></script>
+</head>
+<body data-view="home">
+
+  <!-- Home -->
+  <main id="home" class="home">
+    <h1>AR Sudoku</h1>
+    <p>Point your camera at a Sudoku. The app solves it and writes the missing digits on the paper.</p>
+    <button id="start-camera" class="primary">Start camera</button>
+    <button id="draw-board">Draw a board</button>
+    <button id="try-sample">Try a sample puzzle</button>
+    <label class="button">Upload a photo<input id="upload" type="file" accept="image/*" hidden></label>
+    <p id="home-message" class="note error" hidden></p>
+    <p id="python-status" class="note">Loading the solver…</p>
+  </main>
+
+  <!-- Camera or photo, with the board drawn on it -->
+  <section id="stage" class="stage" data-source="video">
+    <video id="video" playsinline muted autoplay></video>
+    <canvas id="still"></canvas>
+    <canvas id="board" width="900" height="900" hidden></canvas>
+    <div id="handles" class="handles"></div>
+
+    <header class="top">
+      <p id="status" class="pill"></p>
+      <button id="flash" class="small" hidden>Flash</button>
+      <button id="close" class="small" aria-label="Home">✕</button>
+    </header>
+
+    <footer class="controls" data-for="paper">
+      <div class="segmented">
+        <button id="live" class="on">Live</button>
+        <button id="step">Step</button>
+      </div>
+      <p id="counter" class="note"></p>
+      <div class="row">
+        <button id="back">Back</button>
+        <button id="next" class="primary">Next</button>
+        <button id="check">Check</button>
+      </div>
+      <button id="corners" class="link">Set the corners by hand</button>
+    </footer>
+
+    <footer class="controls" data-for="check">
+      <p class="note">Tap a digit to fix it.</p>
+      <div class="row"><button id="continue" class="primary">Continue</button></div>
+    </footer>
+
+    <footer class="controls" data-for="place">
+      <p class="note">Table, wall, whiteboard or a sheet of paper</p>
+      <div class="row">
+        <button id="reset-corners">Reset</button>
+        <button id="done" class="primary">Done</button>
+      </div>
+    </footer>
+
+    <footer class="controls" data-for="play">
+      <p id="play-info" class="note"></p>
+      <div class="row">
+        <button id="new">New</button>
+        <button id="hint" class="primary">Hint</button>
+        <button id="solve">Solve</button>
+      </div>
+      <button id="adjust" class="link">Adjust the corners</button>
+    </footer>
+  </section>
+
+  <!-- Typing in a puzzle -->
+  <section id="typing" class="typing">
+    <p id="typing-status" class="pill">Tap a cell to type the puzzle</p>
+    <canvas id="flat" width="900" height="900"></canvas>
+    <div class="row">
+      <button id="type-cancel">Cancel</button>
+      <button id="type-use" class="primary">Use this puzzle</button>
+    </div>
+  </section>
+
+  <!-- Dialogs: the clicked button's value becomes dialog.returnValue -->
+  <dialog id="picker">
+    <form method="dialog" class="digits">
+      <button value="1">1</button><button value="2">2</button><button value="3">3</button>
+      <button value="4">4</button><button value="5">5</button><button value="6">6</button>
+      <button value="7">7</button><button value="8">8</button><button value="9">9</button>
+      <button value="0" class="wide">Clear</button>
+      <button value="" class="wide">Cancel</button>
+    </form>
+  </dialog>
+
+  <dialog id="difficulty">
+    <form method="dialog" class="choices">
+      <h2>New puzzle</h2>
+      <button value="easy">Easy</button>
+      <button value="medium" class="primary">Medium</button>
+      <button value="hard">Hard</button>
+      <button value="type">Type one in</button>
+      <button value="" class="link">Cancel</button>
+    </form>
+  </dialog>
+</body>
+</html>

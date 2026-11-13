@@ -6,3 +6,5 @@ project-instructions.pdf
 __pycache__/
 .venv/
 samples/
+_site/
+.cache/
