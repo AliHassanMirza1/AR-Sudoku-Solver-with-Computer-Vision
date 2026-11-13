@@ -23,6 +23,7 @@ const MESSAGES = {
   checking: ["Tap a digit the app read wrong", "accent"],
   placing: ["Drag to move, corners to resize", "accent"],
   placing_tilt: ["Drag each corner into place", "accent"],
+  no_grid_corners: ["No grid inside the corners. Drag them onto the board.", "bad"],
   snapped: ["Corners snapped to the sheet. Tap Done.", "accent"],
   tracking: ["Tap a cell to play", "accent"],
   tracking_sheet: ["Tap a cell, or write on the paper", "accent"],
@@ -246,6 +247,7 @@ async function followBoard(frame) {
   if (token !== state.token) return;
   Object.assign(state, { corners: result.corners, track: result.track, onSheet: result.on_sheet });
   if (result.ink) state.game?.setInk(result.ink);
+  if (result.paper) setPaperResult(result.paper); // a hand-drawn board read again
   if (state.autoPinned && result.track === "lost") Object.assign(state, { pinned: false, autoPinned: false });
   render();
 }
@@ -353,7 +355,7 @@ function paperCells(result, checking) {
 }
 
 async function openPhoto(blob) {
-  const image = await createImageBitmap(blob);
+  const image = await decodeImage(blob);
   const scale = Math.min(1, STILL_SIZE / Math.max(image.width, image.height));
   still.width = Math.round(image.width * scale);
   still.height = Math.round(image.height * scale);
@@ -365,6 +367,21 @@ async function openPhoto(blob) {
   const token = state.token;
   const result = await call("photo", [], grabFrame());
   if (token === state.token) setPaperResult(result);
+}
+
+/**
+ * Open a photo. Only Safari opens HEIC (iPhone) photos itself; elsewhere they are decoded with
+ * heic-to (libheif), loaded only then (vendor/heic-to.min.js, ~3 MB).
+ */
+async function decodeImage(blob) {
+  try {
+    return await createImageBitmap(blob);
+  } catch (error) {
+    const heic = /hei[cf]/i.test(`${blob.type} ${blob.name}`);
+    if (!heic) throw new Error("This photo could not be opened. Try a JPEG or PNG.");
+    const { heicTo } = await import("./vendor/heic-to.min.js");
+    return heicTo({ blob, type: "bitmap" });
+  }
 }
 
 /** Check: freeze the picture so the user can fix misread digits. */
@@ -466,8 +483,14 @@ async function finishPlacing() {
   const corners = placement.corners.map((p) => stage.toFrame(p));
   await ready;
   if (state.placing === "paper") {
-    setPaperResult(await call("read_at", [corners], grabFrame()));
+    // Pin first: a hand-drawn board that reads as unsolvable is then read again as it is followed.
     if (state.source === "video") await pin(corners, false);
+    const result = await call("read_at", [corners], grabFrame());
+    if (result.status === "no_grid") {
+      state.pinned = false;
+      return setStatus("no_grid_corners");
+    }
+    setPaperResult(result);
     return show("paper");
   }
   await pin(corners);

@@ -13,7 +13,7 @@ import cv2
 import numpy as np
 
 from sudoku_cv import SudokuTracker, handdrawn, process_image, solve
-from sudoku_cv.detect import GRID_SCORE_THRESHOLD, grid_score, threshold, warp_grid
+from sudoku_cv.detect import grid_score, threshold, warp_grid
 from sudoku_cv.digits import cell_masks, get_data, hog_features, knn_classify, normalize_digit, read_digits
 from sudoku_cv.tracker import find_drawn, make_result, read_drawn
 
@@ -22,11 +22,14 @@ from track import SurfaceTracker, board_on_sheet, find_sheet
 
 READ_STILL_FRAMES = 5  # pen digits are read once the board has been still this long,
 READ_EVERY_FRAMES = 15  # and again every 15 frames while it stays still (reading takes ~25 ms)
-HANDDRAWN_EVERY = 5  # while no grid is found, look for a hand-drawn one every 5th frame (~30 ms)
+HANDDRAWN_AFTER = 10  # frames without a solved puzzle before looking for a hand-drawn board,
+HANDDRAWN_EVERY = 3  # then every 3rd frame (it takes ~70 ms)
+REREAD_EVERY = 10  # a pinned hand-drawn board that reads as unsolvable is read again this often
 
 paper_tracker = SudokuTracker()
 surface = None
-misses = 0  # frames in a row without a grid
+misses = 0  # frames in a row without a solved puzzle
+drawn = None  # the pinned hand-drawn board: its mesh, whether it is solved, frames since read
 
 
 def gray_of(frame):
@@ -36,19 +39,25 @@ def gray_of(frame):
 # paper puzzle (mode A)
 
 def paper_frame(frame):
-    """Live camera: find, read and solve the puzzle (Leonardo's tracker). When it finds no grid,
-    look for a hand-drawn one now and then; once found, the surface tracker follows it and the
-    result says pinned=True."""
+    """Live camera: find, read and solve the puzzle (Leonardo's tracker). When it solves nothing
+    for a while (no grid, or a hand-drawn grid it cannot read), look for a hand-drawn board now
+    and then; once found, the surface tracker follows it and the result says pinned=True."""
     global misses
     result = paper_tracker.process_frame(frame)
-    misses = misses + 1 if result["status"] == "no_grid" else 0
-    if misses and misses % HANDDRAWN_EVERY == 0:
-        drawn = find_drawn(frame)
-        if drawn is not None:
-            pin(frame, drawn["corners"], around=False)
-            drawn["pinned"] = True
-            return drawn
+    misses = misses + 1 if result["status"] != "solved" else 0
+    if misses >= HANDDRAWN_AFTER and (misses - HANDDRAWN_AFTER) % HANDDRAWN_EVERY == 0:
+        found = find_drawn(frame, even=result["status"] == "no_solution")
+        if found is not None:
+            pin(frame, found["corners"], around=False)
+            remember_drawn(found)
+            found["pinned"] = True
+            return found
     return result
+
+
+def remember_drawn(result):
+    global drawn
+    drawn = {"mesh": result["mesh"], "solved": result["status"] == "solved", "frames": 0}
 
 
 def photo(frame):
@@ -57,14 +66,21 @@ def photo(frame):
 
 
 def read_at(frame, corners):
-    """Read and solve the puzzle inside 4 corners the user placed by hand. If the grid there
-    is not even (hand-drawn), its own lines are found and used."""
+    """Read and solve the puzzle inside 4 corners the user placed by hand. A grid that is not
+    straight and even there is hand-drawn: its own lines are used if they can be traced, else
+    straight cells, and every digit on it is a given (none is taken for the user's answer).
+    Call pin first when the camera is live, so an unsolvable read is retried (see follow)."""
     corners = np.float32(corners)
     flat = warp_grid(gray_of(frame), corners)
-    if grid_score(threshold(flat)) < GRID_SCORE_THRESHOLD:
-        found = handdrawn.find_board(cv2.cvtColor(frame, cv2.COLOR_RGBA2BGR), corners)
-        if found is not None:
-            return read_drawn(frame, *found)
+    if grid_score(threshold(flat)) < handdrawn.EVEN_SCORE:
+        bgr = cv2.cvtColor(frame, cv2.COLOR_RGBA2BGR)
+        found = handdrawn.find_board(bgr, corners, even=True)
+        if found is None and handdrawn.no_grid(bgr, corners):
+            return make_result(None)  # status no_grid: nothing to read here
+        result = read_drawn(frame, *(found or (corners, handdrawn.EVEN_MESH)))
+        if surface is not None:
+            remember_drawn(result)  # pinned: read it again as it is followed, until it solves
+        return result
     givens, user_digits, confidence = read_digits(flat)
     return make_result(corners, givens, user_digits, confidence, solve(givens, user_digits))
 
@@ -76,10 +92,11 @@ def set_givens(givens, user_digits):
 
 
 def reset():
-    global surface, misses
+    global surface, misses, drawn
     paper_tracker.reset()
     surface = None
     misses = 0
+    drawn = None
     return {}
 
 
@@ -94,26 +111,33 @@ def snap(frame):
 def pin(frame, corners, around=True):
     """Keep the board at these corners on the surface from now on. around=False for a printed
     puzzle: follow only the paper, not what is around it."""
-    global surface
+    global surface, drawn
     surface = SurfaceTracker(gray_of(frame), corners, around)
+    drawn = None
     return board_state()
 
 
 def follow(frame, givens=None):
-    """Move the pinned board with the camera. With `givens`, also read pen digits when still."""
+    """Move the pinned board with the camera. With `givens`, also read pen digits when still.
+    A pinned hand-drawn board that read as unsolvable is read again now and then (`paper`)."""
     gray = gray_of(frame)
     surface.update(gray)
-    ink = None
+    ink = paper = None
     still = surface.still_count - READ_STILL_FRAMES
     if (givens is not None and surface.on_sheet and surface.state == "tracking"
             and still >= 0 and still % READ_EVERY_FRAMES == 0):
         ink = read_handwritten(gray, surface.corners, givens)
-    return board_state(ink)
+    if drawn is not None and not drawn["solved"] and surface.state == "tracking":
+        drawn["frames"] += 1
+        if drawn["frames"] % REREAD_EVERY == 0:
+            paper = read_drawn(frame, surface.corners, drawn["mesh"])
+            drawn["solved"] = paper["status"] == "solved"
+    return board_state(ink, paper)
 
 
-def board_state(ink=None):
+def board_state(ink=None, paper=None):
     return {"track": surface.state, "corners": surface.corners.tolist(),
-            "on_sheet": surface.on_sheet, "ink": ink}
+            "on_sheet": surface.on_sheet, "ink": ink, "paper": paper}
 
 
 def read_handwritten(gray, corners, givens):

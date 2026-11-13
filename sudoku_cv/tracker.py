@@ -7,8 +7,8 @@ from .digits import find_rotation, read_digits
 from .solver import copy_grid, solve
 
 REFERENCE_WIDTH = 640
-STABLE_FRAMES = 5
-STABLE_PIXELS = 4
+STABLE_FRAMES = 3  # a phone held in the hand rarely keeps the grid within a few pixels for long
+STABLE_PIXELS = 8
 JUMP_PIXELS = 20
 SMOOTHING = 0.5
 LOST_FRAMES = 10
@@ -69,7 +69,7 @@ def process_image(image, debug=False):
     thresh = threshold(gray)
     corners = find_grid_contour(thresh)
     if corners is None:
-        drawn = find_drawn(image)
+        drawn = find_drawn(image, photo=True)
         return drawn or make_result(None, debug=debug_images(image, thresh, None) if debug else None)
 
     corners, flat, _ = upright_grid(gray, corners)
@@ -77,7 +77,7 @@ def process_image(image, debug=False):
     givens, user_digits, confidence = read_digits(flat)
     solved = solve(givens, user_digits)
     if solved["status"] != "solved":  # the grid may be uneven (hand-drawn), read with wrong cells
-        drawn = find_drawn(image)
+        drawn = find_drawn(image, even=True, photo=True)
         if drawn is not None and drawn["status"] == "solved":
             return drawn
     return make_result(corners, givens, user_digits, confidence, solved, debug)
@@ -85,9 +85,11 @@ def process_image(image, debug=False):
 
 # hand-drawn boards
 
-def find_drawn(image):
-    """Find, read and solve a hand-drawn board (see handdrawn.py), or None."""
-    found = handdrawn.find_board(to_bgr(image))
+def find_drawn(image, even=False, photo=False):
+    """Find, read and solve a hand-drawn board (see handdrawn.find_board), or None. A single
+    photo is searched harder (handdrawn.find_board_in_photo)."""
+    find = handdrawn.find_board_in_photo if photo else handdrawn.find_board
+    found = find(to_bgr(image), even=even)
     return None if found is None else read_drawn(image, *found)
 
 

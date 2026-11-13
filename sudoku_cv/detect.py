@@ -59,15 +59,17 @@ def warp_grid(img, corners):
 
 
 def grid_score(flat_thresh):
+    """How well the 10 + 10 lines of an even grid are there: the weaker of the two directions,
+    because ruled paper or a striped surface has perfect lines one way and none the other."""
     size = flat_thresh.shape[0]
     band = max(1, round(LINE_BAND * size / SQUARE))
-    scores = []
+    rows, cols = [], []
     for k in range(10):
         pos = min(round(k * size / 9), size - 1)
         lo, hi = max(pos - band, 0), min(pos + band + 1, size)
-        scores.append((flat_thresh[lo:hi, :] > 0).mean(axis=1).max())
-        scores.append((flat_thresh[:, lo:hi] > 0).mean(axis=0).max())
-    return float(np.mean(scores))
+        rows.append((flat_thresh[lo:hi, :] > 0).mean(axis=1).max())
+        cols.append((flat_thresh[:, lo:hi] > 0).mean(axis=0).max())
+    return float(min(np.mean(rows), np.mean(cols)))
 
 
 def score_corners(thresh, corners, size=SQUARE):
