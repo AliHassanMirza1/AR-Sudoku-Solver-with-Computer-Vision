@@ -8,3 +8,6 @@ __pycache__/
 samples/
 _site/
 .cache/
+mysamples/
+paper/
+tools/fonts/

@@ -19,7 +19,9 @@ PRINTED_THRESHOLD = 0.75
 STRONG_THRESHOLD = 0.85
 MIN_REFERENCES = 5
 CONTRAST_RATIO = 0.8
+MIN_INK_RATIO = 0.2
 HEIGHT_TOLERANCE = 0.15
+HEIGHT_FREE_SCORE = 0.9
 HOG_CELL = 7
 HOG_BINS = 9
 K = 5
@@ -151,6 +153,10 @@ def fit_reference(cells):
     return plane, np.median(strong[:, 3])
 
 
+def is_faint(r, c, contrast, reference):
+    return reference is not None and contrast < MIN_INK_RATIO * (reference[0] @ [1, r, c])
+
+
 def is_printed(r, c, score, contrast, height, reference):
     if score < PRINTED_THRESHOLD:
         return False
@@ -158,7 +164,7 @@ def is_printed(r, c, score, contrast, height, reference):
         return True
     plane, ref_height = reference
     return (contrast >= CONTRAST_RATIO * (plane @ [1, r, c])
-            and abs(height / ref_height - 1) <= HEIGHT_TOLERANCE)
+            and (score >= HEIGHT_FREE_SCORE or abs(height / ref_height - 1) <= HEIGHT_TOLERANCE))
 
 
 def cell_masks(flat_gray):
@@ -203,7 +209,7 @@ def read_digits(flat_gray):
         if is_printed(r, c, score, contrast, height, reference):
             givens[r][c] = label
             confidence[r][c] = round(score, 2)
-        else:
+        elif not is_faint(r, c, contrast, reference):
             handwritten.append(digit)
             handwritten_cells.append((r, c))
 
