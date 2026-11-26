@@ -1,0 +1,108 @@
+% Final presentation, team 8, Thursday 3 Dec 2026. 10 minutes in all: about 5 of slides, 5 of live demo.
+% Same look as the NN-project deck: many short slides, little text, the speaker carries the talk.
+% Style rules: one text size and one text colour everywhere; a title plus one to three short full
+% sentences per slide; capital letter and full stop on every sentence; plain words; no numbers.
+% Text is left-aligned and starts at the same height on every slide; only pictures are centred.
+% Parts: vision.tex (Leonardo), app.tex (Ali). Who presents the opening and closing slides: to decide.
+% Pictures: python slides/make_figures.py (needs the local paper/photos folder).
+% Build: latexmk -pdf slides.tex
+\documentclass[aspectratio=169,12pt]{beamer}
+
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning}
+\usepackage{qrcode}
+
+% Look
+\definecolor{ink}{HTML}{1F2328}
+\definecolor{muted}{HTML}{6E7781}
+\definecolor{faint}{HTML}{D0D7DE}
+\definecolor{accent}{HTML}{0B5CAD}
+\setbeamercolor{normal text}{fg=ink,bg=white}
+\setbeamercolor{frametitle}{fg=ink}
+\setbeamercolor{structure}{fg=accent}
+\setbeamerfont{frametitle}{size=\Large,series=\bfseries}
+\setbeamertemplate{navigation symbols}{}
+\setbeamertemplate{itemize items}{\textcolor{muted}{--}}
+\setbeamertemplate{frametitle}{\vspace{0.6em}\insertframetitle}
+\setbeamertemplate{footline}{\hfill\textcolor{muted}{\scriptsize\insertframenumber}\hspace{1.2em}\vspace{0.8em}}
+\setlength{\parskip}{0.5em}
+
+% Every slide body: same size, same colour, same starting height.
+\newcommand{\body}[1]{\vspace*{1.2em}{\large #1\par}\vfill}
+% A centred picture, then the body text under it.
+\newcommand{\withpic}[2]{\vspace*{1.2em}\begin{center}#1\end{center}\vspace{0.8em}{\large #2\par}\vfill}
+% Pictures side by side, all with the same height.
+\newcommand{\pic}[2][0.46\textheight]{\includegraphics[height=#1]{figures/#2}}
+% Four pictures in a row.
+\newcommand{\fit}[1]{\includegraphics[width=0.22\textwidth,height=0.42\textheight,keepaspectratio]{figures/#1}}
+
+\tikzset{
+  flow/.style={node distance=6mm, every node/.style={font=\large, align=center},
+    >={Stealth[length=2.5mm]}},
+  box/.style={draw=ink, rounded corners=2pt, minimum width=24mm, minimum height=14mm},
+}
+
+\begin{document}
+
+% 1
+\begin{frame}[plain]
+  \vfill
+  {\LARGE\bfseries AR Sudoku Solver\par}
+  \vspace{1.5em}
+  {\large Leonardo Tisato and Muhammad Ali Hassan.\par
+  UIC, CS 415, 3 December 2026.\par}
+  \vfill
+\end{frame}
+
+% 2
+\begin{frame}{Goal}
+  \withpic{\pic{goal.jpg}}{Point a phone at a Sudoku on paper, and the missing digits appear on the
+  paper, all in the browser.}
+\end{frame}
+
+% 3
+\begin{frame}{Pipeline}
+  \withpic{%
+  \begin{tikzpicture}[flow]
+    \node (f) {Camera\\frame};
+    \node[box, right=of f] (g) {Find\\the grid};
+    \node[box, right=of g] (d) {Read\\the digits};
+    \node[box, right=of d] (s) {Solve};
+    \node[box, right=of s] (p) {Draw on\\the paper};
+    \draw[->] (f) -- (g); \draw[->] (g) -- (d); \draw[->] (d) -- (s); \draw[->] (s) -- (p);
+    \draw[->, muted] (p.south) -- ++(0,-7mm) -| node[pos=0.25, below] {next frame} (f.south);
+  \end{tikzpicture}}{Every camera frame goes through four steps.}
+\end{frame}
+
+\input{vision}
+\input{app}
+
+% 13
+\begin{frame}{What works}
+  \withpic{\fit{example_0383.jpg}\hspace{0.5em}\fit{example_0388.jpg}\hspace{0.5em}%
+  \fit{example_0392.jpg}\hspace{0.5em}\fit{example_0416.jpg}}%
+  {It works on rotated and tilted paper, in shadows and on different backgrounds. Pencil and pen
+  digits are read too.}
+\end{frame}
+
+% 14
+\begin{frame}{What does not work}
+  \withpic{\pic{example_0402.jpg}\hspace{1em}\pic{example_0397.jpg}}{A bent sheet fails: one
+  homography can only flatten a flat sheet. It also fails when the border is covered, and it
+  sometimes misreads a handwritten digit.}
+\end{frame}
+
+% 15 (the backup video goes here as a link, in case the live demo breaks)
+\begin{frame}{Demo}
+  \body{Live demo.}
+\end{frame}
+
+% 16
+\begin{frame}{Try it}
+  \withpic{\qrcode[height=0.4\textheight]{https://alihassanmirza1.github.io/AR-Sudoku-Solver-with-Computer-Vision/}}%
+  {Open the app on your phone: alihassanmirza1.github.io/AR-Sudoku-Solver-with-Computer-Vision.}
+\end{frame}
+
+\end{document}
